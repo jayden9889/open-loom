@@ -1,0 +1,28 @@
+{
+  "name": "openloom-desktop",
+  "productName": "OpenLoom",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "description": "Open Loom desktop app: local-first screen recorder with Loom-parity UX.",
+  "type": "module",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.preload.json && tsc --noEmit -p tsconfig.web.json",
+    "start": "electron-vite preview",
+    "dist": "electron-vite build && electron-builder --config electron-builder.yml"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1079.0",
+    "electron-audio-loopback": "^1.0.6",
+    "electron-store": "^11.0.2",
+    "nanoid": "^5.1.16",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "optionalDependencies": {
+    "uiohook-napi": "^1.5.5"
+  }
+}

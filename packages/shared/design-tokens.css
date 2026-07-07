@@ -1,0 +1,124 @@
+/*
+ * Open Loom design tokens (SPEC D1).
+ * Apple-sleek: system font stack, violet accent, light + dark.
+ * Dark mode follows prefers-color-scheme; [data-theme="light"|"dark"] on the
+ * root element overrides it. No glow, blur or shadow as a highlight device.
+ */
+
+:root {
+  /* Typography */
+  --ol-font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto,
+    Helvetica, Arial, sans-serif;
+  --ol-font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
+  --ol-text-xs: 11px;
+  --ol-text-sm: 12px;
+  --ol-text-base: 13px;
+  --ol-text-md: 15px;
+  --ol-text-lg: 17px;
+  --ol-text-xl: 22px;
+  --ol-text-2xl: 28px;
+
+  /* Brand + status */
+  --ol-accent: #635bff;
+  --ol-accent-hover: #574edb;
+  --ol-accent-soft: rgba(99, 91, 255, 0.12);
+  --ol-success: #30d158;
+  --ol-danger: #ff453a;
+  --ol-warning: #ff9f0a;
+  --ol-record: #ff453a;
+
+  /* Radius */
+  --ol-radius-card: 12px;
+  --ol-radius-control: 8px;
+  --ol-radius-pill: 999px;
+
+  /* Spacing 4-grid */
+  --ol-space-1: 4px;
+  --ol-space-2: 8px;
+  --ol-space-3: 12px;
+  --ol-space-4: 16px;
+  --ol-space-5: 20px;
+  --ol-space-6: 24px;
+  --ol-space-8: 32px;
+  --ol-space-10: 40px;
+  --ol-space-12: 48px;
+
+  /* Motion */
+  --ol-ease: cubic-bezier(0.32, 0.72, 0.24, 1);
+  --ol-dur-fast: 120ms;
+  --ol-dur: 180ms;
+
+  /* Focus */
+  --ol-focus-ring: 0 0 0 2px var(--ol-accent);
+
+  /* Subtle elevation only (never a highlight device) */
+  --ol-elev-card: 0 1px 3px rgba(0, 0, 0, 0.08);
+
+  /* Light theme */
+  --ol-bg: #f5f5f7;
+  --ol-surface: #ffffff;
+  --ol-surface-2: #fafafa;
+  --ol-sidebar: rgba(245, 245, 247, 0.82);
+  --ol-text: #1d1d1f;
+  --ol-text-secondary: #6e6e73;
+  --ol-text-tertiary: #aeaeb2;
+  --ol-border: rgba(0, 0, 0, 0.1);
+  --ol-border-strong: rgba(0, 0, 0, 0.18);
+  --ol-hover: rgba(0, 0, 0, 0.045);
+  --ol-active: rgba(0, 0, 0, 0.08);
+  --ol-scrim: rgba(0, 0, 0, 0.4);
+  --ol-on-accent: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ol-bg: #1d1d1f;
+    --ol-surface: #2c2c2e;
+    --ol-surface-2: #242426;
+    --ol-sidebar: rgba(29, 29, 31, 0.78);
+    --ol-text: #f5f5f7;
+    --ol-text-secondary: #98989d;
+    --ol-text-tertiary: #636366;
+    --ol-border: rgba(255, 255, 255, 0.12);
+    --ol-border-strong: rgba(255, 255, 255, 0.22);
+    --ol-hover: rgba(255, 255, 255, 0.06);
+    --ol-active: rgba(255, 255, 255, 0.1);
+    --ol-scrim: rgba(0, 0, 0, 0.55);
+    --ol-elev-card: 0 1px 3px rgba(0, 0, 0, 0.3);
+    --ol-accent-soft: rgba(99, 91, 255, 0.22);
+  }
+}
+
+:root[data-theme='light'] {
+  --ol-bg: #f5f5f7;
+  --ol-surface: #ffffff;
+  --ol-surface-2: #fafafa;
+  --ol-sidebar: rgba(245, 245, 247, 0.82);
+  --ol-text: #1d1d1f;
+  --ol-text-secondary: #6e6e73;
+  --ol-text-tertiary: #aeaeb2;
+  --ol-border: rgba(0, 0, 0, 0.1);
+  --ol-border-strong: rgba(0, 0, 0, 0.18);
+  --ol-hover: rgba(0, 0, 0, 0.045);
+  --ol-active: rgba(0, 0, 0, 0.08);
+  --ol-scrim: rgba(0, 0, 0, 0.4);
+  --ol-elev-card: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --ol-accent-soft: rgba(99, 91, 255, 0.12);
+}
+
+:root[data-theme='dark'] {
+  --ol-bg: #1d1d1f;
+  --ol-surface: #2c2c2e;
+  --ol-surface-2: #242426;
+  --ol-sidebar: rgba(29, 29, 31, 0.78);
+  --ol-text: #f5f5f7;
+  --ol-text-secondary: #98989d;
+  --ol-text-tertiary: #636366;
+  --ol-border: rgba(255, 255, 255, 0.12);
+  --ol-border-strong: rgba(255, 255, 255, 0.22);
+  --ol-hover: rgba(255, 255, 255, 0.06);
+  --ol-active: rgba(255, 255, 255, 0.1);
+  --ol-scrim: rgba(0, 0, 0, 0.55);
+  --ol-elev-card: 0 1px 3px rgba(0, 0, 0, 0.3);
+  --ol-accent-soft: rgba(99, 91, 255, 0.22);
+}

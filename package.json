@@ -1,0 +1,40 @@
+{
+  "name": "open-loom",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "description": "Open-source, local-first Loom-style screen recorder with optional self-hosted sharing.",
+  "workspaces": [
+    "apps/desktop",
+    "packages/shared",
+    "packages/server"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w apps/desktop",
+    "build": "npm run build -w apps/desktop",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "e2e": "playwright test",
+    "dist": "npm run dist -w apps/desktop",
+    "make:icons": "node scripts/make-icons.mjs",
+    "make:sample": "bash scripts/make-sample-video.sh"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "@resvg/resvg-js": "^2.6.2",
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^43.0.0",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "eslint": "^10.6.0",
+    "playwright": "^1.61.1",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.62.1",
+    "vite": "^7.0.0",
+    "vitest": "^4.1.10"
+  }
+}

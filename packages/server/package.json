@@ -1,0 +1,33 @@
+{
+  "name": "openloom-server",
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "Self-hosted share server for Open Loom: hosted watch pages, timestamped comments, emoji reactions, viewer analytics and password protection in one small container.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "openloom-server": "bin/openloom-server.js"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "Dockerfile",
+    "docker-compose.yml"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "start": "node bin/openloom-server.js",
+    "prepack": "npm run build"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.0.8",
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^12.11.1",
+    "hono": "^4.12.28",
+    "nanoid": "^5.1.16"
+  }
+}

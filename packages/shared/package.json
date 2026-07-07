@@ -1,0 +1,15 @@
+{
+  "name": "@openloom/shared",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "description": "Shared types and design tokens for Open Loom.",
+  "types": "types.ts",
+  "exports": {
+    "./types": "./types.ts",
+    "./design-tokens.css": "./design-tokens.css"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

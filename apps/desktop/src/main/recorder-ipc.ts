@@ -1,0 +1,758 @@
+/**
+ * Recording orchestration (SPEC section 5, "Recording orchestration").
+ * Main-process state machine: coordinates the engine window (capture +
+ * MediaRecorder), HUD, bubble, countdown and draw overlays, receives chunk
+ * buffers over IPC into a crash-safe temp file, and post-processes the
+ * result into the library on stop.
+ */
+import { app, clipboard, ipcMain, type Display } from 'electron';
+import { nanoid } from 'nanoid';
+import fs from 'node:fs';
+import path from 'node:path';
+import type {
+  RecordingMode,
+  RecordingOptions,
+  RecordingState,
+  RecoverableRecording,
+  VideoMeta,
+} from '@shared/types';
+import { QUALITY_BITRATES } from '@shared/types';
+import { getSettings } from './settings';
+import { log } from './logger';
+import {
+  broadcast,
+  destroyBubble,
+  destroyCountdown,
+  destroyDrawOverlay,
+  destroyHud,
+  displayForSource,
+  getDrawWindow,
+  getOrCreateEngineWindow,
+  resizeBubbleKeepAnchor,
+  setBubbleVisible,
+  setDrawInteractive,
+  showBubble,
+  showCountdown,
+  showDrawOverlay,
+  showHud,
+} from './windows';
+import { setPendingCapture, clearPendingCapture, displayIdForSource } from './capture';
+import * as ffmpeg from './ffmpeg';
+import { shareVideo } from './share';
+import { library } from './library';
+import { maybeAutoTranscribe } from './transcribe';
+
+interface ActiveRecording {
+  tempId: string;
+  dir: string;
+  chunkFile: string;
+  stream: fs.WriteStream;
+  opts: RecordingOptions;
+  startedAt: number;
+  /** Milliseconds recorded before the current segment (pauses excluded). */
+  recordedMsBase: number;
+  segmentStartedAt: number | null;
+  status: 'countdown' | 'recording' | 'paused' | 'processing';
+  mimeType: string;
+  display: Display;
+  cameraOn: boolean;
+  micOn: boolean;
+  drawOn: boolean;
+  cancelled: boolean;
+  stoppedResolvers: { resolve: (r: { videoId: string }) => void; reject: (e: Error) => void }[];
+}
+
+let active: ActiveRecording | null = null;
+let tickTimer: NodeJS.Timeout | null = null;
+let lastState: RecordingState = { status: 'idle', elapsedSec: 0 };
+
+function tmpRoot(): string {
+  return path.join(app.getPath('userData'), 'recordings-tmp');
+}
+
+function elapsedSec(rec: ActiveRecording): number {
+  const segment = rec.segmentStartedAt ? Date.now() - rec.segmentStartedAt : 0;
+  return Math.floor((rec.recordedMsBase + segment) / 1000);
+}
+
+function emitState(partial?: Partial<RecordingState>): void {
+  if (active) {
+    lastState = {
+      status: active.status,
+      elapsedSec: elapsedSec(active),
+      mode: active.opts.mode,
+      cameraOn: active.cameraOn,
+      micOn: active.micOn,
+      drawOn: active.drawOn,
+      drawAvailable: active.opts.mode !== 'cam' && !!active.opts.sourceIsDisplay,
+      ...partial,
+    };
+  } else {
+    lastState = { status: 'idle', elapsedSec: 0, ...partial };
+  }
+  broadcast('ol:recording-state', lastState);
+}
+
+export function currentState(): RecordingState {
+  return lastState;
+}
+
+function writeManifest(rec: ActiveRecording, status: 'recording' | 'completed'): void {
+  const manifest = {
+    tempId: rec.tempId,
+    startedAt: new Date(rec.startedAt).toISOString(),
+    opts: rec.opts,
+    mimeType: rec.mimeType,
+    approxDurationSec: elapsedSec(rec),
+    status,
+  };
+  try {
+    fs.writeFileSync(path.join(rec.dir, 'manifest.json'), JSON.stringify(manifest, null, 2));
+  } catch (err) {
+    log.warn(`manifest write failed: ${String(err)}`);
+  }
+}
+
+function startTick(): void {
+  stopTick();
+  tickTimer = setInterval(() => {
+    if (!active) return;
+    emitState();
+    if (active.status === 'recording') {
+      writeManifest(active, 'recording');
+      const maxMin = getSettings().recording.maxDurationMin;
+      if (maxMin > 0 && elapsedSec(active) >= maxMin * 60) {
+        log.info(`max duration of ${maxMin} min reached; stopping`);
+        void stopRecording().catch((err) => log.error(`auto-stop failed: ${String(err)}`));
+      }
+    }
+  }, 1000);
+}
+
+function stopTick(): void {
+  if (tickTimer) clearInterval(tickTimer);
+  tickTimer = null;
+}
+
+function closeSessionWindows(): void {
+  destroyHud();
+  destroyBubble();
+  destroyCountdown();
+  destroyDrawOverlay();
+}
+
+// ---------------------------------------------------------------------------
+// Start
+// ---------------------------------------------------------------------------
+
+export async function startRecording(opts: RecordingOptions): Promise<void> {
+  if (active) throw new Error('A recording is already in progress.');
+  if (!ffmpeg.ffmpegAvailable()) {
+    throw new Error('ffmpeg is required to save recordings. Install it from the Setup screen first.');
+  }
+  if (opts.mode !== 'cam' && !opts.sourceId) {
+    throw new Error('Pick a screen or window to record first.');
+  }
+
+  const settings = getSettings();
+  const tempId = `rec-${Date.now().toString(36)}-${nanoid(6)}`;
+  const dir = path.join(tmpRoot(), tempId);
+  fs.mkdirSync(dir, { recursive: true });
+  const chunkFile = path.join(dir, 'chunks.bin');
+  const stream = fs.createWriteStream(chunkFile, { flags: 'a' });
+
+  let display: Display;
+  if (opts.mode !== 'cam' && opts.sourceIsDisplay && opts.sourceId) {
+    display = displayForSource(await displayIdForSource(opts.sourceId));
+  } else {
+    display = displayForSource(undefined);
+  }
+
+  active = {
+    tempId,
+    dir,
+    chunkFile,
+    stream,
+    opts,
+    startedAt: Date.now(),
+    recordedMsBase: 0,
+    segmentStartedAt: null,
+    status: 'countdown',
+    mimeType: '',
+    display,
+    cameraOn: opts.cameraOn,
+    micOn: opts.micOn,
+    drawOn: false,
+    cancelled: false,
+    stoppedResolvers: [],
+  };
+
+  try {
+    if (opts.mode !== 'cam' && opts.sourceId) {
+      setPendingCapture(opts.sourceId, opts.systemAudio);
+    }
+
+    const engine = getOrCreateEngineWindow();
+    await whenEngineReady(engine.webContents.id);
+
+    if (settings.countdown) {
+      emitState();
+      showCountdown(display);
+      await waitForCountdown();
+      destroyCountdown();
+      if (!active || active.cancelled) return;
+    }
+
+    await beginEngineCapture();
+  } catch (err) {
+    await hardResetSession();
+    throw err instanceof Error ? err : new Error(String(err));
+  }
+}
+
+const engineReadyWaiters = new Map<number, (() => void)[]>();
+const readyEngines = new Set<number>();
+
+function whenEngineReady(webContentsId: number): Promise<void> {
+  if (readyEngines.has(webContentsId)) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('The recorder engine did not start. Try again.')), 15_000);
+    const list = engineReadyWaiters.get(webContentsId) ?? [];
+    list.push(() => {
+      clearTimeout(timer);
+      resolve();
+    });
+    engineReadyWaiters.set(webContentsId, list);
+  });
+}
+
+let countdownWaiter: (() => void) | null = null;
+
+function waitForCountdown(): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      countdownWaiter = null;
+      resolve();
+    }, 4500);
+    countdownWaiter = () => {
+      clearTimeout(timer);
+      countdownWaiter = null;
+      resolve();
+    };
+  });
+}
+
+async function beginEngineCapture(): Promise<void> {
+  const rec = active;
+  if (!rec) return;
+  const settings = getSettings();
+  const engine = getOrCreateEngineWindow();
+
+  const started = new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error('Recording did not start. Check screen permissions in Setup and try again.')),
+      20_000
+    );
+    engineStartWaiter = (err) => {
+      clearTimeout(timer);
+      engineStartWaiter = null;
+      if (err) reject(new Error(err));
+      else resolve();
+    };
+  });
+
+  engine.webContents.send('engine:begin', {
+    opts: rec.opts,
+    videoBitsPerSecond: QUALITY_BITRATES[rec.opts.quality],
+    bubble: { size: settings.bubble.size, mirror: settings.bubble.mirror },
+    captureSize:
+      rec.opts.mode !== 'cam'
+        ? {
+            width: Math.round(rec.display.size.width * rec.display.scaleFactor),
+            height: Math.round(rec.display.size.height * rec.display.scaleFactor),
+          }
+        : null,
+  });
+
+  await started;
+  if (!active || active !== rec || rec.cancelled) return;
+
+  rec.status = 'recording';
+  rec.segmentStartedAt = Date.now();
+  writeManifest(rec, 'recording');
+
+  showHud(rec.display);
+  if (rec.opts.mode === 'screen-cam' && rec.cameraOn) {
+    showBubble(rec.display, settings.bubble.size);
+  }
+  if (rec.opts.mode !== 'cam' && rec.opts.sourceIsDisplay) {
+    showDrawOverlay(rec.display);
+  }
+  startTick();
+  emitState();
+  log.info(`recording started (${rec.opts.mode}, ${rec.opts.quality}@${rec.opts.fps}, mime=${rec.mimeType})`);
+}
+
+let engineStartWaiter: ((err?: string) => void) | null = null;
+let engineStopWaiter: (() => void) | null = null;
+
+// ---------------------------------------------------------------------------
+// Pause / resume / stop / cancel / restart
+// ---------------------------------------------------------------------------
+
+export async function pauseRecording(): Promise<void> {
+  const rec = active;
+  if (!rec || rec.status !== 'recording') return;
+  getOrCreateEngineWindow().webContents.send('engine:pause', null);
+  if (rec.segmentStartedAt) {
+    rec.recordedMsBase += Date.now() - rec.segmentStartedAt;
+    rec.segmentStartedAt = null;
+  }
+  rec.status = 'paused';
+  emitState();
+}
+
+export async function resumeRecording(): Promise<void> {
+  const rec = active;
+  if (!rec || rec.status !== 'paused') return;
+  getOrCreateEngineWindow().webContents.send('engine:resume', null);
+  rec.segmentStartedAt = Date.now();
+  rec.status = 'recording';
+  emitState();
+}
+
+export async function stopRecording(): Promise<{ videoId: string }> {
+  const rec = active;
+  if (!rec) throw new Error('Nothing is recording.');
+  if (rec.status === 'processing') {
+    return new Promise((resolve, reject) => rec.stoppedResolvers.push({ resolve, reject }));
+  }
+  if (rec.segmentStartedAt) {
+    rec.recordedMsBase += Date.now() - rec.segmentStartedAt;
+    rec.segmentStartedAt = null;
+  }
+  rec.status = 'processing';
+  stopTick();
+  // HUD + bubble close instantly on stop (SPEC R14).
+  closeSessionWindows();
+  emitState({ processingNote: 'Finishing up' });
+
+  const engineStopped = new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      engineStopWaiter = null;
+      resolve();
+    }, 15_000);
+    engineStopWaiter = () => {
+      clearTimeout(timer);
+      engineStopWaiter = null;
+      resolve();
+    };
+  });
+  getOrCreateEngineWindow().webContents.send('engine:stop', null);
+  await engineStopped;
+
+  await new Promise<void>((resolve) => rec.stream.end(resolve));
+  clearPendingCapture();
+
+  return new Promise<{ videoId: string }>((resolve, reject) => {
+    rec.stoppedResolvers.push({ resolve, reject });
+    void finalizeRecording(rec)
+      .then((videoId) => {
+        if (active === rec) active = null;
+        emitState({ status: 'idle', elapsedSec: 0, lastVideoId: videoId });
+        maybeAutoShareOnStop(videoId);
+        for (const r of rec.stoppedResolvers) r.resolve({ videoId });
+      })
+      .catch((err: unknown) => {
+        log.error(`finalize failed: ${String(err)}`);
+        if (active === rec) active = null;
+        emitState({ status: 'idle', elapsedSec: 0, error: humanProcessingError(err) });
+        for (const r of rec.stoppedResolvers) r.reject(err instanceof Error ? err : new Error(String(err)));
+      });
+  });
+}
+
+function humanProcessingError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  return `We could not finish processing this recording: ${msg} The raw capture is kept and offered for recovery next launch.`;
+}
+
+/**
+ * SPEC R14 / G6: when a share provider is configured and "copy link on stop"
+ * is on, mint the share URL the moment the recording lands, copy it to the
+ * clipboard, and let the upload run in the background. Failures surface as a
+ * toast and never break the finished recording, which stays in the library.
+ */
+function maybeAutoShareOnStop(videoId: string): void {
+  const settings = getSettings();
+  if (settings.sharing.provider === 'none' || !settings.sharing.autoCopyOnStop) return;
+  void shareVideo(videoId)
+    .then(({ url }) => {
+      clipboard.writeText(url);
+      broadcast('ol:toast', { kind: 'success', text: 'Link copied - uploading in the background' });
+    })
+    .catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`auto-share on stop failed for ${videoId}: ${msg}`);
+      broadcast('ol:toast', {
+        kind: 'error',
+        text: `Saved to your library, but sharing did not start: ${msg}`,
+      });
+    });
+}
+
+export async function cancelRecording(): Promise<void> {
+  const rec = active;
+  if (!rec) return;
+  rec.cancelled = true;
+  if (countdownWaiter) countdownWaiter();
+  getOrCreateEngineWindow().webContents.send('engine:cancel', null);
+  await hardResetSession();
+  log.info('recording cancelled');
+}
+
+export async function restartRecording(): Promise<void> {
+  const rec = active;
+  if (!rec) return;
+  const opts = rec.opts;
+  await cancelRecording();
+  // Restart skips the countdown: the user is already set up (Loom behaviour).
+  try {
+    await startRecordingWithoutCountdown(opts);
+  } catch (err) {
+    emitState({ status: 'idle', error: err instanceof Error ? err.message : String(err) });
+    throw err;
+  }
+}
+
+async function startRecordingWithoutCountdown(opts: RecordingOptions): Promise<void> {
+  if (active) throw new Error('A recording is already in progress.');
+  const tempId = `rec-${Date.now().toString(36)}-${nanoid(6)}`;
+  const dir = path.join(tmpRoot(), tempId);
+  fs.mkdirSync(dir, { recursive: true });
+  const chunkFile = path.join(dir, 'chunks.bin');
+  let display: Display;
+  if (opts.mode !== 'cam' && opts.sourceIsDisplay && opts.sourceId) {
+    display = displayForSource(await displayIdForSource(opts.sourceId));
+  } else {
+    display = displayForSource(undefined);
+  }
+  active = {
+    tempId,
+    dir,
+    chunkFile,
+    stream: fs.createWriteStream(chunkFile, { flags: 'a' }),
+    opts,
+    startedAt: Date.now(),
+    recordedMsBase: 0,
+    segmentStartedAt: null,
+    status: 'countdown',
+    mimeType: '',
+    display,
+    cameraOn: opts.cameraOn,
+    micOn: opts.micOn,
+    drawOn: false,
+    cancelled: false,
+    stoppedResolvers: [],
+  };
+  if (opts.mode !== 'cam' && opts.sourceId) setPendingCapture(opts.sourceId, opts.systemAudio);
+  const engine = getOrCreateEngineWindow();
+  await whenEngineReady(engine.webContents.id);
+  await beginEngineCapture();
+}
+
+async function hardResetSession(): Promise<void> {
+  const rec = active;
+  active = null;
+  stopTick();
+  closeSessionWindows();
+  clearPendingCapture();
+  if (rec) {
+    await new Promise<void>((resolve) => rec.stream.end(resolve));
+    try {
+      fs.rmSync(rec.dir, { recursive: true, force: true });
+    } catch (err) {
+      log.warn(`temp cleanup failed: ${String(err)}`);
+    }
+  }
+  emitState({ status: 'idle', elapsedSec: 0 });
+}
+
+// ---------------------------------------------------------------------------
+// Mid-recording toggles
+// ---------------------------------------------------------------------------
+
+export function toggleCamera(on: boolean): void {
+  const rec = active;
+  if (!rec) return;
+  rec.cameraOn = on;
+  getOrCreateEngineWindow().webContents.send('engine:set-camera', on);
+  if (rec.opts.mode === 'screen-cam') {
+    if (on) {
+      showBubble(rec.display, getSettings().bubble.size);
+    } else {
+      setBubbleVisible(false);
+    }
+  }
+  emitState();
+}
+
+export function toggleMic(on: boolean): void {
+  const rec = active;
+  if (!rec) return;
+  rec.micOn = on;
+  getOrCreateEngineWindow().webContents.send('engine:set-mic', on);
+  emitState();
+}
+
+export function toggleDraw(on: boolean): void {
+  const rec = active;
+  if (!rec) return;
+  if (!rec.opts.sourceIsDisplay || rec.opts.mode === 'cam') return; // window/cam capture: draw not available
+  rec.drawOn = on;
+  setDrawInteractive(on);
+  emitState();
+}
+
+export function setBubbleSize(size: 'S' | 'M' | 'L'): void {
+  const { bubble } = getSettings();
+  resizeBubbleKeepAnchor(size);
+  getOrCreateEngineWindow().webContents.send('engine:set-bubble', { size, mirror: bubble.mirror });
+}
+
+export function sendClickRipple(x: number, y: number): void {
+  const rec = active;
+  if (!rec || rec.status !== 'recording') return;
+  const draw = getDrawWindow();
+  if (!draw) return;
+  const bounds = draw.getBounds();
+  draw.webContents.send('draw:ripple', { x: x - bounds.x, y: y - bounds.y });
+}
+
+// ---------------------------------------------------------------------------
+// Engine IPC wiring
+// ---------------------------------------------------------------------------
+
+export function registerEngineIpc(): void {
+  ipcMain.on('engine:ready', (event) => {
+    readyEngines.add(event.sender.id);
+    for (const waiter of engineReadyWaiters.get(event.sender.id) ?? []) waiter();
+    engineReadyWaiters.delete(event.sender.id);
+    event.sender.once('destroyed', () => readyEngines.delete(event.sender.id));
+  });
+
+  ipcMain.on('engine:started', (_event, info: { mimeType: string }) => {
+    if (active) active.mimeType = info.mimeType;
+    engineStartWaiter?.();
+  });
+
+  ipcMain.on('engine:error', (_event, message: string) => {
+    log.error(`engine error: ${message}`);
+    if (engineStartWaiter) {
+      engineStartWaiter(message);
+      void hardResetSession();
+      return;
+    }
+    // Mid-recording failure: keep the chunks (recovery) and reset the session.
+    const rec = active;
+    active = null;
+    stopTick();
+    closeSessionWindows();
+    clearPendingCapture();
+    if (rec) {
+      rec.stream.end();
+      writeManifest(rec, 'recording');
+    }
+    emitState({ status: 'idle', elapsedSec: 0, error: message });
+  });
+
+  ipcMain.on('engine:chunk', (_event, chunk: Uint8Array) => {
+    const rec = active;
+    if (!rec) return;
+    rec.stream.write(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength));
+  });
+
+  ipcMain.on('engine:stopped', () => {
+    engineStopWaiter?.();
+  });
+
+  ipcMain.on('countdown:done', () => {
+    countdownWaiter?.();
+  });
+
+  ipcMain.on('countdown:cancel', () => {
+    void cancelRecording();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Finalize: temp chunks -> seekable mp4 + thumb + gif + waveform + meta.json
+// ---------------------------------------------------------------------------
+
+function formatTitle(pattern: string, when: Date, mode: RecordingMode): string {
+  const date = when.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  const time = when.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  const title = pattern.replaceAll('{date}', date).replaceAll('{time}', time).replaceAll('{mode}', mode);
+  return title.trim() || `Recording - ${date}, ${time}`;
+}
+
+async function finalizeRecording(rec: ActiveRecording): Promise<string> {
+  const durationSec = Math.max(1, Math.round((rec.recordedMsBase / 1000) * 10) / 10);
+  const videoId = await processCaptureFile({
+    chunkFile: rec.chunkFile,
+    mimeType: rec.mimeType,
+    mode: rec.opts.mode,
+    approxDurationSec: durationSec,
+    createdAt: new Date(rec.startedAt),
+  });
+  try {
+    fs.rmSync(rec.dir, { recursive: true, force: true });
+  } catch (err) {
+    log.warn(`temp cleanup failed: ${String(err)}`);
+  }
+  log.info(`recording ${videoId} landed in library`);
+  return videoId;
+}
+
+/** Shared by normal stop and crash recovery. */
+export async function processCaptureFile(input: {
+  chunkFile: string;
+  mimeType: string;
+  mode: RecordingMode;
+  approxDurationSec: number;
+  createdAt: Date;
+}): Promise<string> {
+  const bins = ffmpeg.requireBinaries();
+  const store = library();
+  const videoId = nanoid(10);
+  const videoDir = store.videoDir(videoId);
+  fs.mkdirSync(videoDir, { recursive: true });
+  const finalPath = path.join(videoDir, 'video.mp4');
+
+  try {
+    emitState({ status: 'processing', processingNote: 'Preparing video' });
+    const probeIn = await ffmpeg.probe(bins, input.chunkFile).catch(() => null);
+    const expectedDuration = probeIn?.durationSec || input.approxDurationSec;
+
+    await ffmpeg.enqueueJob(videoId, probeIn && ffmpeg.canRemux(probeIn) ? 'remux' : 'transcode', async (report) => {
+      if (probeIn && ffmpeg.canRemux(probeIn)) {
+        report(10, 'Remuxing');
+        await ffmpeg.remux(bins, input.chunkFile, finalPath);
+      } else {
+        await ffmpeg.transcodeH264(bins, input.chunkFile, finalPath, {
+          expectedDurationSec: expectedDuration,
+          onProgress: (pct) => report(pct, 'Converting to MP4'),
+        });
+      }
+    });
+
+    const info = await ffmpeg.probe(bins, finalPath);
+    emitState({ status: 'processing', processingNote: 'Creating preview' });
+
+    await ffmpeg.enqueueJob(videoId, 'thumbnail', async () => {
+      await ffmpeg.thumbnail(bins, finalPath, path.join(videoDir, 'thumb.jpg'), info.durationSec * 0.25);
+    });
+    await ffmpeg.enqueueJob(videoId, 'gif', async () => {
+      await ffmpeg.gifPreview(bins, finalPath, path.join(videoDir, 'preview.gif'));
+    });
+    await ffmpeg.enqueueJob(videoId, 'waveform', async () => {
+      await ffmpeg.waveformPeaks(bins, finalPath, path.join(videoDir, 'waveform.json'));
+    });
+
+    const settings = getSettings();
+    const meta: VideoMeta = {
+      id: videoId,
+      title: formatTitle(settings.namePattern, input.createdAt, input.mode),
+      createdAt: input.createdAt.toISOString(),
+      durationSec: info.durationSec,
+      width: info.width,
+      height: info.height,
+      fps: info.fps,
+      sizeBytes: info.sizeBytes,
+      mode: input.mode,
+      folderId: null,
+    };
+    store.put(meta);
+    // Auto-transcribe after processing when an engine is configured (SPEC T1);
+    // runs in the background and never blocks the Watch view opening.
+    maybeAutoTranscribe(videoId);
+    return videoId;
+  } catch (err) {
+    // Leave no half-built library entries behind.
+    try {
+      fs.rmSync(videoDir, { recursive: true, force: true });
+    } catch {
+      /* best effort */
+    }
+    throw err;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Crash recovery (SPEC R8)
+// ---------------------------------------------------------------------------
+
+export function listRecoverable(): RecoverableRecording[] {
+  const root = tmpRoot();
+  if (!fs.existsSync(root)) return [];
+  const out: RecoverableRecording[] = [];
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    if (active && active.tempId === entry.name) continue;
+    const dir = path.join(root, entry.name);
+    try {
+      const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8')) as {
+        tempId: string;
+        startedAt: string;
+        opts: RecordingOptions;
+        mimeType: string;
+        approxDurationSec: number;
+        status: string;
+      };
+      const chunkFile = path.join(dir, 'chunks.bin');
+      if (manifest.status === 'completed' || !fs.existsSync(chunkFile)) continue;
+      const size = fs.statSync(chunkFile).size;
+      if (size === 0) continue;
+      out.push({
+        tempId: manifest.tempId,
+        startedAt: manifest.startedAt,
+        mode: manifest.opts.mode,
+        mimeType: manifest.mimeType,
+        approxDurationSec: manifest.approxDurationSec,
+        sizeBytes: size,
+      });
+    } catch {
+      // Unreadable manifest: not recoverable; leave for discard-all cleanup.
+    }
+  }
+  return out;
+}
+
+export async function recoverRecording(tempId: string): Promise<{ videoId: string }> {
+  const rec = listRecoverable().find((r) => r.tempId === tempId);
+  if (!rec) throw new Error('That recording is no longer recoverable.');
+  const dir = path.join(tmpRoot(), tempId);
+  const videoId = await processCaptureFile({
+    chunkFile: path.join(dir, 'chunks.bin'),
+    mimeType: rec.mimeType,
+    mode: rec.mode,
+    approxDurationSec: rec.approxDurationSec,
+    createdAt: new Date(rec.startedAt),
+  });
+  fs.rmSync(dir, { recursive: true, force: true });
+  emitState({ status: 'idle', elapsedSec: 0, lastVideoId: videoId });
+  return { videoId };
+}
+
+export async function discardRecoverable(tempId: string): Promise<void> {
+  if (!/^[A-Za-z0-9_-]+$/.test(tempId)) throw new Error('Invalid recording id.');
+  fs.rmSync(path.join(tmpRoot(), tempId), { recursive: true, force: true });
+}
+
+export function isRecordingActive(): boolean {
+  return active !== null && active.status !== 'processing';
+}
+
+export function isPaused(): boolean {
+  return active?.status === 'paused';
+}

@@ -1,0 +1,87 @@
+@import '@shared/design-tokens.css';
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: var(--ol-font);
+  user-select: none;
+}
+
+#bubble-root {
+  height: 100%;
+}
+
+.bubble {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  overflow: hidden;
+  background: #101014;
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  box-sizing: border-box;
+  -webkit-app-region: drag;
+}
+
+#bubble-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.bubble-off {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #f5f5f7;
+  font-size: 12px;
+  background: #101014;
+  text-align: center;
+}
+
+.bubble-controls {
+  position: absolute;
+  left: 50%;
+  bottom: 10%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity var(--ol-dur-fast) var(--ol-ease);
+  -webkit-app-region: no-drag;
+}
+
+.bubble:hover .bubble-controls {
+  opacity: 1;
+}
+
+.bubble-controls button {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(20, 20, 24, 0.85);
+  color: #f5f5f7;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--ol-font);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.bubble-controls button:hover {
+  background: rgba(60, 60, 68, 0.95);
+}
+
+.bubble-controls button.active {
+  background: var(--ol-accent);
+  border-color: var(--ol-accent);
+}

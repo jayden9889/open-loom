@@ -1,0 +1,14 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Open Loom app icon — macOS squircle, violet field, record-loop glyph -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7A6CFF"/>
+      <stop offset="1" stop-color="#5344E0"/>
+    </linearGradient>
+  </defs>
+  <path d="M512 64c214.8 0 322.2 0 393.1 57.9a256 256 0 0 1 37 37C1000 229.8 1000 337.2 1000 512s0 282.2-57.9 353.1a256 256 0 0 1-37 37C834.2 960 726.8 960 512 960s-322.2 0-393.1-57.9a256 256 0 0 1-37-37C24 794.2 24 686.8 24 512s0-282.2 57.9-353.1a256 256 0 0 1 37-37C189.8 64 297.2 64 512 64Z" fill="url(#bg)"/>
+  <!-- loop: an O drawn as a thread that opens at the top-right — "Open" Loom -->
+  <path d="M 692.5 331.5 A 255 255 0 1 0 763 512" stroke="#FFFFFF" stroke-width="86" stroke-linecap="round" fill="none"/>
+  <!-- record dot nested in the loop opening -->
+  <circle cx="734" cy="368" r="62" fill="#FFFFFF"/>
+</svg>

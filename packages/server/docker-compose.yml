@@ -1,0 +1,20 @@
+# One-command self-hosting for the Open Loom share server.
+#   API_KEY=$(openssl rand -base64 24) BASE_URL=https://videos.example.com docker compose up -d
+# Everything the server stores (SQLite + video files) lives on the data volume;
+# backing up = backing up that volume (see docs/SELF-HOSTING.md).
+services:
+  openloom-server:
+    build: .
+    ports:
+      - '${PORT:-3000}:3000'
+    environment:
+      - API_KEY=${API_KEY:?Set API_KEY, e.g. API_KEY=$(openssl rand -base64 24)}
+      - BASE_URL=${BASE_URL:-http://localhost:3000}
+      - MAX_UPLOAD_MB=${MAX_UPLOAD_MB:-2048}
+      - CREATOR_NAME=${CREATOR_NAME:-}
+    volumes:
+      - openloom-data:/data
+    restart: unless-stopped
+
+volumes:
+  openloom-data:

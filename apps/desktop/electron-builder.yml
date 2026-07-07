@@ -1,0 +1,56 @@
+appId: org.openloom.app
+productName: OpenLoom
+copyright: Open Loom contributors
+# Pinned so electron-builder can resolve the platform binaries without a fixed
+# version in package.json (the dep is declared as a caret range).
+electronVersion: 43.0.0
+
+directories:
+  output: ../../release
+  buildResources: ../../assets
+
+# electron-vite emits main, preload and renderer into out/.
+files:
+  - out/**
+  - package.json
+
+# App icons and tray templates ship as loose resources so the main process can
+# read them at runtime (see tray.ts). Kept out of the asar for direct fs access.
+extraResources:
+  - from: ../../assets
+    to: assets
+    filter:
+      - "**/*"
+
+# Optional native input hook for click highlights (SPEC R11); the app runs
+# fine without it, so never fail the build when it is absent.
+asarUnpack:
+  - "**/node_modules/uiohook-napi/**"
+
+mac:
+  category: public.app-category.productivity
+  icon: ../../assets/icon.png
+  target:
+    - dmg
+    - zip
+  # Screen recording, camera and microphone need usage strings on macOS.
+  extendInfo:
+    NSCameraUsageDescription: Open Loom records your camera when you choose a camera or screen-plus-camera recording.
+    NSMicrophoneUsageDescription: Open Loom records your microphone when the mic is enabled for a recording.
+
+win:
+  icon: ../../assets/icon.png
+  target:
+    - nsis
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+
+linux:
+  icon: ../../assets/icon.png
+  category: AudioVideo
+  target:
+    - AppImage
+    - deb

@@ -1,0 +1,59 @@
+@import '@shared/design-tokens.css';
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: var(--ol-font);
+  user-select: none;
+  cursor: pointer;
+}
+
+#countdown-root,
+.countdown {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+}
+
+.countdown {
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.countdown-number {
+  width: 168px;
+  height: 168px;
+  border-radius: 50%;
+  background: var(--ol-accent);
+  color: #ffffff;
+  font-size: 96px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.countdown-number.pop {
+  animation: countdown-pop 340ms var(--ol-ease);
+}
+
+@keyframes countdown-pop {
+  0% {
+    transform: scale(1.18);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.countdown-hint {
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 15px;
+  font-weight: 500;
+}
