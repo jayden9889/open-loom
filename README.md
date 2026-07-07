@@ -38,6 +38,19 @@ telemetry, no vendor lock. MIT licensed.
   <img src="docs/media/watch-page.png" alt="Open Loom hosted watch page" width="49%">
 </p>
 
+## Watch the walkthrough
+
+An 80-second tour of installing, recording, your library, editing, transcription and AI, and sharing.
+
+<p align="center">
+  <a href="https://github.com/jayden9889/open-loom/releases/download/v0.1.0/open-loom-walkthrough.mp4">
+    <img src="docs/media/walkthrough-poster.png" alt="Watch the Open Loom walkthrough" width="70%">
+  </a>
+</p>
+<p align="center">
+  <a href="https://github.com/jayden9889/open-loom/releases/download/v0.1.0/open-loom-walkthrough.mp4"><b>Play the walkthrough</b></a>
+</p>
+
 ## Highlights
 
 - **Three capture modes.** Screen and camera, screen only, or camera only. Pick a whole display or a
@@ -69,7 +82,15 @@ The full comparison with Loom, feature by feature, is in [FEATURES.md](FEATURES.
 - macOS 14.2 or newer for system-audio capture. The rest of the app works on macOS 13 and later.
   Windows and Linux code paths are kept portable but v1 is only tested on macOS.
 
-## Quick start
+## Install the app
+
+The quickest way on an Apple Silicon Mac: download **`OpenLoom-0.1.0-arm64.dmg`** from the
+[latest release](https://github.com/jayden9889/open-loom/releases/latest), drag Open Loom into
+Applications, then open it. The build is not code-signed yet, so the first time you must
+**right-click the app, choose Open, then Open again** (macOS remembers the choice after that). It
+then lives in your menu bar and Dock. Intel Macs, Windows and Linux: build from source below.
+
+## Run from source
 
 ```bash
 git clone https://github.com/jayden9889/open-loom.git
