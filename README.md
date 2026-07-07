@@ -16,12 +16,27 @@
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
+<p align="center">
+  <a href="https://github.com/jayden9889/open-loom/actions/workflows/ci.yml"><img src="https://github.com/jayden9889/open-loom/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/license-MIT-635BFF" alt="MIT licence">
+  <img src="https://img.shields.io/badge/platform-macOS%2014.2%2B-635BFF" alt="Platform">
+</p>
+
 ---
 
 Record your screen, camera or both. Everything lands as a plain, seekable MP4 in a library on your
 own disk. When you want to send a link, share through a share server you run yourself (hosted watch
 page with comments, reactions and viewer analytics) or any S3-compatible bucket. No accounts, no
 telemetry, no vendor lock. MIT licensed.
+
+<p align="center">
+  <img src="docs/media/new-recording.png" alt="Open Loom new-recording panel" width="49%">
+  <img src="docs/media/watch.png" alt="Open Loom watch view" width="49%">
+</p>
+<p align="center">
+  <img src="docs/media/share-dialog.png" alt="Open Loom share dialog" width="49%">
+  <img src="docs/media/watch-page.png" alt="Open Loom hosted watch page" width="49%">
+</p>
 
 ## Highlights
 
