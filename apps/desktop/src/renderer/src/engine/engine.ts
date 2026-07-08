@@ -5,8 +5,9 @@
  * timeslice. Chunks stream to the main process over IPC and land in a
  * crash-safe temp file.
  */
-import type { EngineBeginPayload } from '@shared/types';
+import type { CameraLayout, EngineBeginPayload } from '@shared/types';
 import { BUBBLE_SIZES } from '@shared/types';
+import { cameraDrawPlan } from './layout';
 
 const internal = window.openloomInternal;
 
@@ -22,6 +23,12 @@ interface EngineSession {
 }
 
 let session: EngineSession | null = null;
+
+// Monotonic token claimed by each begin. A cancel/restart bumps it, so a begin
+// still awaiting getDisplayMedia/getUserMedia inside buildSession can detect
+// that it was cancelled during setup and abort instead of starting a recorder
+// (and leaving the camera/screen live) after the user already cancelled.
+let beginToken = 0;
 
 // ---------------------------------------------------------------------------
 // Codec selection (SPEC locked decision: mp4 h264 preferred, then vp9, vp8)
@@ -49,6 +56,7 @@ function pickMimeType(): string {
 interface Compositor {
   stream: MediaStream;
   setCameraOn(on: boolean): void;
+  setCameraLayout(layout: CameraLayout): void;
   setBubble(size: 'S' | 'M' | 'L', mirror: boolean): void;
   stop(): void;
 }
@@ -63,7 +71,7 @@ function createCompositor(
   canvas.width = Math.max(2, windowVideo.videoWidth);
   canvas.height = Math.max(2, windowVideo.videoHeight);
   const ctx = canvas.getContext('2d')!;
-  let cameraOn = initial.cameraOn;
+  let layout: CameraLayout = initial.cameraOn ? 'bubble' : 'off';
   let bubbleSize = initial.size;
   let mirror = initial.mirror;
   let running = true;
@@ -72,47 +80,66 @@ function createCompositor(
 
   function drawFrame(): void {
     if (!running) return;
+    // The canvas always tracks the source dimensions so the output size is stable
+    // across layout switches, even when the window frame itself is not drawn.
     if (windowVideo.videoWidth > 0) {
       if (canvas.width !== windowVideo.videoWidth || canvas.height !== windowVideo.videoHeight) {
         canvas.width = windowVideo.videoWidth;
         canvas.height = windowVideo.videoHeight;
       }
-      ctx.drawImage(windowVideo, 0, 0, canvas.width, canvas.height);
     }
-    if (cameraOn && camVideo && camVideo.videoWidth > 0) {
-      // Bubble scaled against a 1080p reference so it matches the on-screen size.
-      const scale = canvas.height / 1080;
-      const d = Math.round(BUBBLE_SIZES[bubbleSize] * scale);
-      const margin = Math.round(24 * scale);
-      const x = margin;
-      const y = canvas.height - d - margin;
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(x + d / 2, y + d / 2, d / 2, 0, Math.PI * 2);
-      ctx.clip();
-      // Cover-fit the camera into the circle.
-      const vw = camVideo.videoWidth;
-      const vh = camVideo.videoHeight;
-      const s = Math.max(d / vw, d / vh);
-      const dw = vw * s;
-      const dh = vh * s;
-      const dx = x + (d - dw) / 2;
-      const dy = y + (d - dh) / 2;
-      if (mirror) {
-        ctx.translate(x + d / 2, 0);
-        ctx.scale(-1, 1);
-        ctx.translate(-(x + d / 2), 0);
+    const camReady = !!(camVideo && camVideo.videoWidth > 0);
+    const plan = cameraDrawPlan(
+      layout,
+      canvas.width,
+      canvas.height,
+      camReady,
+      camReady ? camVideo!.videoWidth : 0,
+      camReady ? camVideo!.videoHeight : 0,
+      BUBBLE_SIZES[bubbleSize]
+    );
+
+    if (plan.drawWindow) {
+      if (windowVideo.videoWidth > 0) ctx.drawImage(windowVideo, 0, 0, canvas.width, canvas.height);
+    } else {
+      // Full-camera layout hides the screen; clear first so no window frame bleeds through.
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    if (plan.camera && camVideo) {
+      if (plan.camera.kind === 'full') {
+        const { rect } = plan.camera;
+        ctx.save();
+        if (mirror) {
+          ctx.translate(canvas.width, 0);
+          ctx.scale(-1, 1);
+        }
+        ctx.drawImage(camVideo, rect.dx, rect.dy, rect.dw, rect.dh);
+        ctx.restore();
+      } else {
+        const { box, rect } = plan.camera;
+        const { d, x, y } = box;
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(x + d / 2, y + d / 2, d / 2, 0, Math.PI * 2);
+        ctx.clip();
+        if (mirror) {
+          ctx.translate(x + d / 2, 0);
+          ctx.scale(-1, 1);
+          ctx.translate(-(x + d / 2), 0);
+        }
+        ctx.drawImage(camVideo, rect.dx, rect.dy, rect.dw, rect.dh);
+        ctx.restore();
+        // Hairline ring so the bubble reads against light content.
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(x + d / 2, y + d / 2, d / 2 - 1, 0, Math.PI * 2);
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+        ctx.stroke();
+        ctx.restore();
       }
-      ctx.drawImage(camVideo, dx, dy, dw, dh);
-      ctx.restore();
-      // Hairline ring so the bubble reads against light content.
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(x + d / 2, y + d / 2, d / 2 - 1, 0, Math.PI * 2);
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = 'rgba(255,255,255,0.85)';
-      ctx.stroke();
-      ctx.restore();
     }
     // setTimeout pump: requestAnimationFrame stalls for occluded/hidden windows.
     setTimeout(drawFrame, frameMs);
@@ -122,7 +149,10 @@ function createCompositor(
   return {
     stream: canvas.captureStream(fps),
     setCameraOn: (on) => {
-      cameraOn = on;
+      layout = on ? 'bubble' : 'off';
+    },
+    setCameraLayout: (l) => {
+      layout = l;
     },
     setBubble: (size, m) => {
       bubbleSize = size;
@@ -317,14 +347,32 @@ function teardown(): void {
   if (s.audioCtx && s.audioCtx.state !== 'closed') void s.audioCtx.close();
 }
 
+/** Stop the streams from a built-but-not-yet-started session (cancelled during setup). */
+function stopBuilt(built: Awaited<ReturnType<typeof buildSession>>): void {
+  built.compositor?.stop();
+  for (const stream of built.allStreams) {
+    for (const track of stream.getTracks()) track.stop();
+  }
+  for (const track of built.recordStream.getTracks()) track.stop();
+  if (built.audioCtx && built.audioCtx.state !== 'closed') void built.audioCtx.close();
+}
+
 internal.onEngineBegin((payload) => {
   void (async () => {
     if (session) {
       internal.engineError('The previous recording session is still shutting down. Try again.');
       return;
     }
+    const myToken = ++beginToken;
     try {
       const built = await buildSession(payload);
+      // A cancel/restart arrived while buildSession was awaiting permission /
+      // getDisplayMedia: abort now instead of starting a recorder (and leaving
+      // the capture streams live) for a session the user already cancelled.
+      if (myToken !== beginToken) {
+        stopBuilt(built);
+        return;
+      }
       const mimeType = pickMimeType();
       const recorder = new MediaRecorder(built.recordStream, {
         ...(mimeType ? { mimeType } : {}),
@@ -417,6 +465,9 @@ internal.onEngineResume(() => {
 });
 
 internal.onEngineCancel(() => {
+  // Bump the token unconditionally so a begin still inside buildSession aborts
+  // even though no session exists yet (cancel during permission/setup).
+  beginToken++;
   const s = session;
   if (!s) return;
   s.stopping = true;
@@ -432,6 +483,10 @@ internal.onEngineCancel(() => {
 
 internal.onEngineSetCamera((on) => {
   session?.compositor?.setCameraOn(on);
+});
+
+internal.onEngineSetLayout((layout) => {
+  session?.compositor?.setCameraLayout(layout);
 });
 
 internal.onEngineSetMic((on) => {

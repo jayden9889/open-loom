@@ -111,6 +111,9 @@ export function WatchView({
   const [chapterDraft, setChapterDraft] = useState<{ index: number; title: string } | null>(null);
   const [taskDraft, setTaskDraft] = useState<{ index: number; text: string } | null>(null);
   const [summaryDraft, setSummaryDraft] = useState<string | null>(null);
+  const [youtubeOpen, setYoutubeOpen] = useState(false);
+  const [youtubeDraft, setYoutubeDraft] = useState('');
+  const [youtubeError, setYoutubeError] = useState<string | null>(null);
 
   const videoUrl = `${window.openloom.fileUrl(id, 'video.mp4')}?v=${refresh}`;
   const vttUrl = `${window.openloom.fileUrl(id, 'transcript.vtt')}?v=${refresh}`;
@@ -130,6 +133,18 @@ export function WatchView({
   useEffect(() => {
     return window.openloom.onJobProgress((j) => {
       if (j.videoId !== id) return;
+      // Share uploads surface here too (this is where the user lands after
+      // stop + auto-share), so a failed background upload is visible rather than
+      // leaving a confidently-copied link that 404s. The failure toast fires
+      // globally; here we reload meta so the persistent "not live" state below
+      // reflects whether uploadedAt was written.
+      if (j.kind === 'upload') {
+        if (j.pct >= 100) {
+          setRefresh((r) => r + 1);
+          void onChanged();
+        }
+        return;
+      }
       if (!['transcribe', 'ai', 'trim', 'stitch', 'revert'].includes(j.kind)) return;
       if (j.pct >= 100) {
         setRunningJob(null);
@@ -164,6 +179,38 @@ export function WatchView({
     void window.openloom.generateAI(id, kinds).then(
       () => setRefresh((r) => r + 1),
       (err) => push('error', cleanIpcError(err))
+    );
+  };
+
+  // Guided "Publish to YouTube (unlisted)": main reveals the MP4 in Finder and
+  // opens youtube.com/upload; the AI title (if any) is copied for pasting.
+  const startYouTubePublish = () => {
+    setTab('details');
+    setYoutubeOpen(true);
+    setYoutubeError(null);
+    void window.openloom.youtubePublishStart(id).then(
+      (res) => {
+        if (res.titleCopied) {
+          push('info', 'Your AI title is on the clipboard, ready to paste into the YouTube title field.');
+        }
+      },
+      (err) => push('error', cleanIpcError(err))
+    );
+  };
+
+  const saveYouTubeLink = () => {
+    setYoutubeError(null);
+    void window.openloom.youtubeSaveLink(id, youtubeDraft).then(
+      (m) => {
+        setMeta(m);
+        setYoutubeDraft('');
+        if (m.youtubeUrl) {
+          window.openloom.copyToClipboard(m.youtubeUrl);
+          push('success', 'YouTube link saved and copied.');
+        }
+        void onChanged();
+      },
+      (err) => setYoutubeError(cleanIpcError(err))
     );
   };
 
@@ -328,6 +375,15 @@ export function WatchView({
           >
             <Icon.Reveal width={15} height={15} />
             {navigator.platform.toLowerCase().includes('mac') ? 'Reveal in Finder' : 'Show in folder'}
+          </button>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={startYouTubePublish}
+            title="Publish this recording to YouTube as unlisted"
+          >
+            <Icon.Play width={15} height={15} />
+            Publish to YouTube
           </button>
           <button type="button" className="btn-primary" onClick={() => setShareOpen(true)}>
             <Icon.Link width={15} height={15} />
@@ -557,21 +613,121 @@ export function WatchView({
                 </div>
                 <div>
                   <dt>Sharing</dt>
-                  <dd>{meta.share ? `Shared via ${meta.share.provider}` : 'Local only'}</dd>
+                  <dd>
+                    {meta.share
+                      ? meta.share.uploadedAt
+                        ? `Shared via ${meta.share.provider}`
+                        : `Shared via ${meta.share.provider} - upload not finished`
+                      : 'Local only'}
+                  </dd>
                 </div>
               </dl>
-              {meta.share && (
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={() => {
-                    window.openloom.copyToClipboard(meta.share!.url);
-                    push('success', 'Link copied.');
-                  }}
-                >
-                  <Icon.Link width={15} height={15} />
-                  Copy share link
-                </button>
+              {meta.share && !meta.share.uploadedAt && (
+                <p className="side-note" role="status">
+                  The upload did not finish, so this link is not live yet. Retry to make it work.
+                </p>
+              )}
+              {meta.share &&
+                (meta.share.uploadedAt ? (
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => {
+                      window.openloom.copyToClipboard(meta.share!.url);
+                      push('success', 'Link copied.');
+                    }}
+                  >
+                    <Icon.Link width={15} height={15} />
+                    Copy share link
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => {
+                      push('info', 'Retrying the upload in the background.');
+                      void window.openloom
+                        .shareVideo(id)
+                        .then(() => onChanged())
+                        .catch((err) => push('error', cleanIpcError(err)));
+                    }}
+                  >
+                    <Icon.Refresh width={15} height={15} />
+                    Retry upload
+                  </button>
+                ))}
+
+              {(youtubeOpen || meta.youtubeUrl) && (
+                <div className="ai-block youtube-block">
+                  <div className="ai-block-head">
+                    <Icon.Play width={15} height={15} />
+                    <h4>Publish to YouTube</h4>
+                  </div>
+
+                  {meta.youtubeUrl ? (
+                    <>
+                      <p className="side-note">This recording is published on YouTube as unlisted.</p>
+                      <a
+                        className="youtube-link"
+                        href={meta.youtubeUrl}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          window.openloom.openExternal(meta.youtubeUrl!);
+                        }}
+                      >
+                        {meta.youtubeUrl}
+                      </a>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => {
+                          window.openloom.copyToClipboard(meta.youtubeUrl!);
+                          push('success', 'Link copied.');
+                        }}
+                      >
+                        <Icon.Link width={15} height={15} />
+                        Copy YouTube link
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <ol className="youtube-steps">
+                        <li>Drop your video - it is revealed in Finder</li>
+                        <li>Set Visibility to Unlisted</li>
+                        <li>Paste the link below</li>
+                      </ol>
+                      <label className="field-label" htmlFor="youtube-url">
+                        YouTube link
+                      </label>
+                      <input
+                        id="youtube-url"
+                        type="url"
+                        placeholder="https://www.youtube.com/watch?v=..."
+                        value={youtubeDraft}
+                        onChange={(e) => {
+                          setYoutubeDraft(e.target.value);
+                          if (youtubeError) setYoutubeError(null);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') saveYouTubeLink();
+                        }}
+                      />
+                      {youtubeError && (
+                        <p className="youtube-error" role="alert">
+                          {youtubeError}
+                        </p>
+                      )}
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={saveYouTubeLink}
+                        disabled={!youtubeDraft.trim()}
+                      >
+                        Save link
+                      </button>
+                    </>
+                  )}
+                </div>
               )}
 
               {(aiConfigured || meta.ai?.summary || meta.ai?.tasks || meta.ai?.title) && (

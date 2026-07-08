@@ -15,11 +15,12 @@ the watch page shows a processing state until the file arrives.
 
 ## OpenLoom Server provider
 
-This is the full Loom loop. Run the server (two commands, see [SELF-HOSTING.md](SELF-HOSTING.md)),
-then in Settings, then Sharing:
+This is the full Loom loop. Run the server (see [SELF-HOSTING.md](SELF-HOSTING.md) for the
+recommended domain and HTTPS setup), then in Settings, then Sharing:
 
 1. Choose OpenLoom Server.
-2. Enter the server URL and the creator API key printed when you started it.
+2. Enter the server URL and the creator API key from when you set it up (see
+   [SELF-HOSTING.md](SELF-HOSTING.md) if the key needs finding again).
 3. Press Test. It checks the server is up and the key is accepted.
 
 Each share uploads `video.mp4`, `thumb.jpg`, `preview.gif` and the captions, resumably. The watch
@@ -32,8 +33,10 @@ Any S3-compatible bucket works. Cloudflare R2 is a good default because egress i
 
 1. **Create a bucket.** In the Cloudflare dashboard, R2, create a bucket, for example
    `openloom-videos`.
-2. **Make it reachable.** Either enable the r2.dev development URL on the bucket, or attach a custom
-   domain (Settings, then Public access, then Custom Domains). This gives you a public base URL.
+2. **Make it reachable, with a custom domain.** Attach a custom domain (Settings, then Public
+   access, then Custom Domains) so the link reads as your own infrastructure, for example
+   `videos.example.com`, rather than a raw bucket URL. The r2.dev development URL works too and is
+   fine while testing, but a link actually sent to someone is more credible on a domain you control.
 3. **Create an API token.** R2, Manage API Tokens, create a token with Object Read and Write for the
    bucket. Note the Access Key ID and Secret Access Key, and your account's S3 endpoint, which looks
    like `https://<account-id>.r2.cloudflarestorage.com`.
@@ -42,7 +45,7 @@ Any S3-compatible bucket works. Cloudflare R2 is a good default because egress i
    - Region: `auto` for R2
    - Bucket: your bucket name
    - Access key ID and Secret access key: from the token
-   - Public base URL: the r2.dev URL or your custom domain
+   - Public base URL: your custom domain (recommended) or the r2.dev URL for testing
    - Path-style addressing: leave off for R2, on for MinIO
 5. **Press Test.** It performs a real request against the bucket with your keys.
 

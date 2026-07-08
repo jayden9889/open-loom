@@ -7,6 +7,7 @@ import { Hono } from 'hono';
 import type { AppCtx } from '../context.js';
 import { getVideo, type CommentRow, type ViewRow, type VideoRow } from '../db.js';
 import { COVERAGE_BUCKETS, SESSION_RE, nowIso } from '../util.js';
+import { clientIp, type Limiters } from '../rate-limit.js';
 
 function parseCoverage(json: string): boolean[] {
   try {
@@ -25,13 +26,21 @@ function serializeCoverage(cov: boolean[]): string {
 }
 
 /** Viewer side: POST /v/:id/beacon */
-export function beaconRoutes(ctx: AppCtx, isUnlocked: (c: import('hono').Context, video: VideoRow) => boolean): Hono {
+export function beaconRoutes(
+  ctx: AppCtx,
+  isUnlocked: (c: import('hono').Context, video: VideoRow) => boolean,
+  limiters: Limiters
+): Hono {
   const app = new Hono();
 
   app.post('/:id/beacon', async (c) => {
     const video = getVideo(ctx.db, c.req.param('id'));
     if (!video) return c.json({ error: 'Video not found.' }, 404);
     if (!isUnlocked(c, video)) return c.json({ error: 'This video is password protected.' }, 403);
+    const ip = clientIp(c);
+    if (!limiters.beacon.allow(`${ip}:${video.id}`)) {
+      return c.json({ error: 'Too many beacons. Slow down.' }, 429);
+    }
 
     let body: Record<string, unknown>;
     try {
@@ -49,7 +58,11 @@ export function beaconRoutes(ctx: AppCtx, isUnlocked: (c: import('hono').Context
       typeof body.positionSec === 'number' && Number.isFinite(body.positionSec) && body.positionSec >= 0
         ? body.positionSec
         : 0;
-    const bucketsIn = Array.isArray(body.coverage) ? (body.coverage as unknown[]) : [];
+    // Only COVERAGE_BUCKETS distinct indices can ever matter; clamp the array so
+    // a giant coverage payload can never blow up the loop below.
+    const bucketsIn = Array.isArray(body.coverage)
+      ? (body.coverage as unknown[]).slice(0, COVERAGE_BUCKETS)
+      : [];
 
     const existing = ctx.db
       .prepare('SELECT * FROM views WHERE id = ? AND video_id = ?')
@@ -70,6 +83,11 @@ export function beaconRoutes(ctx: AppCtx, isUnlocked: (c: import('hono').Context
         )
         .run(now, Math.max(existing.max_position_sec, positionSec), serializeCoverage(coverage), name, viewId);
     } else {
+      // Minting a brand-new view row is the unbounded-growth vector: a fresh
+      // viewId per request would spawn a row each time. Cap distinct new views
+      // per IP+video per window; over the cap we ack without inserting so a real
+      // viewer's later beacons (which UPDATE an existing row) keep working.
+      if (!limiters.viewMint.allow(`${ip}:${video.id}`)) return c.body(null, 204);
       ctx.db
         .prepare(
           `INSERT INTO views (id, video_id, session_id, viewer_name, started_at, last_beacon_at, max_position_sec, coverage_json)

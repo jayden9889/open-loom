@@ -5,7 +5,7 @@
  * configured shortcut (the window is too narrow for side tooltips).
  */
 import { useEffect, useState } from 'react';
-import type { RecordingState, ShortcutSettings } from '@shared/types';
+import type { CameraLayout, RecordingState, ShortcutSettings } from '@shared/types';
 import { DEFAULT_SHORTCUTS } from '@shared/types';
 
 function formatElapsed(sec: number): string {
@@ -62,6 +62,48 @@ const stroke = {
   strokeLinejoin: 'round',
 } as const;
 
+// Signature feature: flip the live camera layout mid-recording. Cycles
+// Screen+Camera -> Camera (full face) -> Screen only (SPEC R6).
+const LAYOUT_ORDER: CameraLayout[] = ['bubble', 'full', 'off'];
+const LAYOUT_LABEL: Record<CameraLayout, string> = {
+  bubble: 'Screen + Camera',
+  full: 'Camera',
+  off: 'Screen only',
+};
+
+function nextLayout(l: CameraLayout): CameraLayout {
+  const i = LAYOUT_ORDER.indexOf(l);
+  return LAYOUT_ORDER[(i + 1) % LAYOUT_ORDER.length]!;
+}
+
+function layoutIcon(l: CameraLayout) {
+  if (l === 'full') {
+    // Full-frame camera: a face.
+    return (
+      <svg width="18" height="18" viewBox="0 0 24 24" {...stroke} aria-hidden="true">
+        <circle cx="12" cy="9" r="3.2" />
+        <path d="M5.5 19a6.5 6.5 0 0 1 13 0" />
+      </svg>
+    );
+  }
+  if (l === 'off') {
+    // Screen only: a monitor.
+    return (
+      <svg width="18" height="18" viewBox="0 0 24 24" {...stroke} aria-hidden="true">
+        <rect x="3" y="4.5" width="18" height="13" rx="2" />
+        <path d="M9 20h6" />
+      </svg>
+    );
+  }
+  // Screen + camera bubble.
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" {...stroke} aria-hidden="true">
+      <rect x="3" y="4.5" width="18" height="13" rx="2" />
+      <circle cx="7.5" cy="13.5" r="2.6" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
 export function Hud() {
   const [state, setState] = useState<RecordingState>({ status: 'recording', elapsedSec: 0 });
   const [shortcuts, setShortcuts] = useState<ShortcutSettings>(DEFAULT_SHORTCUTS);
@@ -80,6 +122,8 @@ export function Hud() {
 
   const paused = state.status === 'paused';
   const isCam = state.mode === 'cam';
+  const canLayout = state.mode === 'screen-cam';
+  const layout: CameraLayout = state.cameraLayout ?? (state.cameraOn ? 'bubble' : 'off');
 
   return (
     <div className="hud">
@@ -163,6 +207,17 @@ export function Hud() {
           <rect x="3" y="7" width="12" height="10" rx="2.5" />
           <path d="m15 10.5 5-2.5v8l-5-2.5" />
         </svg>
+      </HudButton>
+
+      <HudButton
+        label={`Layout: ${LAYOUT_LABEL[layout]}`}
+        hint={canLayout ? `${LAYOUT_LABEL[layout]} - tap to switch` : 'Layout needs screen + camera'}
+        onHint={setHint}
+        onClick={() => window.openloom.setLayout(nextLayout(layout))}
+        active={canLayout && layout !== 'off'}
+        disabled={!canLayout}
+      >
+        {layoutIcon(layout)}
       </HudButton>
 
       <HudButton

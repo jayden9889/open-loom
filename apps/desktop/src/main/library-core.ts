@@ -138,12 +138,15 @@ export class LibraryStore {
     this.writeIndex(idx);
   }
 
-  duplicate(id: string): VideoMeta {
+  async duplicate(id: string): Promise<VideoMeta> {
     const source = this.get(id);
     const newId = this.deps.newId();
     const from = this.videoDir(id);
     const to = this.videoDir(newId);
-    fs.cpSync(from, to, { recursive: true });
+    // Async copy: a large recording can be hundreds of MB to GB; a synchronous
+    // fs.cpSync here blocks the Electron main-process event loop and freezes
+    // every window for the whole copy.
+    await fs.promises.cp(from, to, { recursive: true });
     const copy: VideoMeta = {
       ...source,
       id: newId,

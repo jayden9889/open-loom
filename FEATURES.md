@@ -17,6 +17,7 @@ noted where one exists.
 | Camera bubble (circular, draggable) | Free | ✅ v1 |
 | Bubble sizes S/M/L | Free | ✅ v1 |
 | Hide/show camera mid-recording | Free | ✅ v1 |
+| Switch face/screen layout mid-recording | Business+ | ✅ v1 (free — flip Screen+Camera / Camera full face / Screen only, live, both capture paths) |
 | Flip / mirror camera | Free | ✅ v1 |
 | Virtual backgrounds / blur | Free | 🔜 roadmap (MediaPipe segmentation) |
 | Avatar mode | Paid | 🔜 roadmap |
@@ -76,6 +77,7 @@ noted where one exists.
 | Loom feature | Loom plan gate | Open Loom |
 |---|---|---|
 | Instant share link on stop (clipboard) | Free | ✅ v1 (link minted at stop; upload continues in background) |
+| Publish to YouTube (unlisted) | — | ✅ v1 (guided manual publish: reveals the MP4, opens youtube.com/upload, copies the AI title, and captures the link you paste back; no API, because unaudited-API uploads are force-locked to private) |
 | Hosted watch page | Free | ✅ v1 (your own OpenLoom Server — one Docker command — or any S3-compatible bucket with a static player page) |
 | Emoji reactions | Free | ✅ v1 (server mode) |
 | Time-stamped comments (threaded) | Free | ✅ v1 (server mode) |
@@ -104,3 +106,9 @@ Uploads also sit in a dedicated ~**100 uploads/day per project** quota bucket sh
 user of the app, and the `youtube.upload` OAuth scope requires Google app verification.
 That breaks "record → link works instantly" for an installable open-source tool, so Open Loom
 uses storage **you** own instead. Full analysis: `docs/SHARING.md`.
+
+That said, Open Loom makes the manual path close to one gesture. The **Publish to YouTube
+(unlisted)** helper on each recording reveals the MP4, opens `youtube.com/upload`, copies the AI
+title ready to paste, and then captures the resulting `youtube.com` link straight back onto the
+video as its shareable link (with a Copy button). It is a guided manual publish, never an
+automated backend, precisely because the API path is force-locked to private.

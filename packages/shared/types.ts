@@ -13,6 +13,13 @@ export type RecordingMode = 'screen-cam' | 'screen' | 'cam';
 export type QualityPreset = '720p' | '1080p' | '4k';
 export type BubbleSize = 'S' | 'M' | 'L';
 
+/**
+ * Live camera layout, switchable mid-recording in Screen+Camera mode (SPEC R6):
+ * 'bubble' = screen with the camera bubble (default), 'full' = camera fills the
+ * whole frame, 'off' = screen only. cam-only mode is always full face already.
+ */
+export type CameraLayout = 'bubble' | 'full' | 'off';
+
 /** Pixel diameters for the webcam bubble sizes (SPEC R6). */
 export const BUBBLE_SIZES: Record<BubbleSize, number> = { S: 160, M: 240, L: 320 };
 
@@ -46,6 +53,8 @@ export interface RecordingState {
   elapsedSec: number;
   mode?: RecordingMode;
   cameraOn?: boolean;
+  /** Current live camera layout (Screen+Camera recordings only). */
+  cameraLayout?: CameraLayout;
   micOn?: boolean;
   drawOn?: boolean;
   /** Draw is only possible while capturing a whole display (SPEC R10). */
@@ -103,6 +112,12 @@ export interface VideoMeta {
      */
     password?: string;
   };
+  /**
+   * Canonical youtube.com/watch?v=<id> link captured by the guided
+   * "Publish to YouTube (unlisted)" helper (SPEC S7). Set once the user pastes
+   * back the link after a manual upload; this is not an automated share provider.
+   */
+  youtubeUrl?: string;
   transcript?: { language: string; engine: string };
   ai?: {
     title?: string;
@@ -415,6 +430,8 @@ export interface OpenLoomAPI {
   toggleMic(on: boolean): void;
   toggleDraw(on: boolean): void;
   setBubbleSize(s: BubbleSize): void;
+  /** Switch the live camera layout mid-recording (Screen+Camera only). */
+  setLayout(layout: CameraLayout): void;
 
   // library
   listVideos(): Promise<VideoMeta[]>;
@@ -451,6 +468,12 @@ export interface OpenLoomAPI {
   testShareProvider(cfg: unknown): Promise<{ ok: boolean; error?: string }>;
   /** Delete a viewer comment on the share server via the creator key (additive; see docs/DECISIONS.md). */
   deleteShareComment(videoId: string, commentId: string): Promise<void>;
+
+  // publish to YouTube (guided manual, unlisted; additive to SPEC section 5, see docs/DECISIONS.md)
+  /** Reveal the MP4, open youtube.com/upload, and copy the AI title if present. */
+  youtubePublishStart(videoId: string): Promise<{ titleCopied: boolean }>;
+  /** Validate + persist a pasted YouTube link; rejects non-YouTube input. */
+  youtubeSaveLink(videoId: string, url: string): Promise<VideoMeta>;
 
   // settings & system
   getSettings(): Promise<Settings>;
@@ -512,8 +535,11 @@ export interface OpenLoomInternal {
   onEngineResume(cb: () => void): () => void;
   onEngineCancel(cb: () => void): () => void;
   onEngineSetCamera(cb: (on: boolean) => void): () => void;
+  onEngineSetLayout(cb: (layout: CameraLayout) => void): () => void;
   onEngineSetMic(cb: (on: boolean) => void): () => void;
   onEngineSetBubble(cb: (b: { size: BubbleSize; mirror: boolean }) => void): () => void;
+  /** Bubble window: switch between circular ('bubble'), full-frame ('full') and hidden ('off'). */
+  onBubbleLayout(cb: (layout: CameraLayout) => void): () => void;
   // countdown window
   countdownDone(): void;
   countdownCancel(): void;

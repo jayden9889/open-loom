@@ -26,6 +26,7 @@ root.innerHTML = `
   </div>
 `;
 
+const bubbleEl = document.getElementById('bubble')!;
 const video = document.getElementById('bubble-video') as HTMLVideoElement;
 const offOverlay = document.getElementById('bubble-off')!;
 const mirrorBtn = document.getElementById('bubble-mirror')!;
@@ -37,6 +38,14 @@ function applyMirror(): void {
   video.style.transform = mirror ? 'scaleX(-1)' : 'none';
   mirrorBtn.classList.toggle('active', mirror);
 }
+
+// 'full' turns the (window-resized) bubble into an opaque full-frame camera so
+// full-display capture records the face full-screen. The window itself is
+// resized by the main process; this just swaps the circle styling for a
+// rectangular cover-fit (SPEC R6).
+window.openloomInternal.onBubbleLayout((layout) => {
+  bubbleEl.classList.toggle('full', layout === 'full');
+});
 
 async function startCamera(): Promise<void> {
   const settings = await window.openloomInternal.getSettings();

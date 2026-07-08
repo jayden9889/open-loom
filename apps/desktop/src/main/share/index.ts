@@ -5,11 +5,13 @@
  * x3, and keeps meta.json's share block in sync.
  */
 import path from 'node:path';
-import type { Settings, ShareActivity, ShareProvider, ShareResult, VideoMeta } from '@shared/types';
+import type { Settings, ShareActivity, ShareProvider, ShareResult, UploadPlan, VideoMeta } from '@shared/types';
+import fs from 'node:fs';
 import { getSettings, getSecret } from '../settings';
 import { SECRET_MASK } from '../settings-core';
 import { library } from '../library';
 import { emitJobProgress } from '../ffmpeg';
+import { broadcast } from '../windows';
 import { log } from '../logger';
 import {
   createShareProvider,
@@ -78,7 +80,15 @@ async function runUploadWithRetry(provider: ShareProvider, result: ShareResult, 
         const message = err instanceof Error ? err.message : String(err);
         log.warn(`share upload attempt ${attempt}/${RETRIES} failed for ${meta.id}: ${message}`);
         if (attempt === RETRIES) {
+          // The share URL was already minted and copied, but the upload never
+          // landed: the link is a dead 404. Surface it loudly (toast + a
+          // persistent per-card state via the missing uploadedAt marker) so the
+          // user never sends a link that is not live. Retry from the library.
           emitJobProgress({ videoId: meta.id, kind: 'upload', pct: 100, note: `Upload failed: ${message}` });
+          broadcast('ol:toast', {
+            kind: 'error',
+            text: `The share upload failed, so the copied link is not live yet. Open the video in your library and retry. (${message})`,
+          });
           return;
         }
         await sleep(RETRY_DELAYS_MS[attempt - 1] ?? 5_000);
@@ -115,13 +125,55 @@ export async function shareVideo(id: string): Promise<{ url: string }> {
     throw new Error('Sharing is turned off. Pick a provider under Settings, then Sharing, and try again.');
   }
   const provider = currentProvider(kind);
-  const result = await provider.prepareShare(meta);
+  // Re-sharing / retrying an already-shared video must reuse its remote id.
+  // Re-running prepareShare on the server provider POSTs a fresh create, which
+  // the server answers with a new id, orphaning the first row and breaking the
+  // link already copied to the clipboard. The S3 provider keys off the local
+  // id, so its prepareShare is idempotent and safe to re-run.
+  const result =
+    meta.share && provider instanceof ServerShareProvider
+      ? provider.resumeShare(meta)
+      : await provider.prepareShare(meta);
   const block: NonNullable<VideoMeta['share']> = meta.share
     ? { ...meta.share, url: result.shareUrl }
     : shareBlock(provider, result);
   library().update(id, { share: block });
   void runUploadWithRetry(provider, result, { ...meta, share: block });
   return { url: result.shareUrl };
+}
+
+/**
+ * Push a freshly generated captions track to an already-shared remote copy.
+ * Auto-share on stop mints and uploads before transcription finishes, so the
+ * hosted page would otherwise never gain captions. Best-effort: no-op when the
+ * video is not shared or has no transcript, and never throws into the caller
+ * (the transcription pipeline).
+ */
+export async function syncShareCaptions(id: string): Promise<void> {
+  const meta = library().get(id);
+  if (!meta.share) return;
+  const filesDir = path.join(library().root, meta.id);
+  if (!fs.existsSync(path.join(filesDir, 'transcript.vtt'))) return;
+  const provider = currentProvider(meta.share.provider);
+  let plan: UploadPlan;
+  if (provider instanceof ServerShareProvider) {
+    plan = provider.captionsPlan(meta);
+  } else if (provider instanceof S3ShareProvider) {
+    plan = provider.captionsPlan(meta);
+  } else {
+    return;
+  }
+  activeUploads.add(meta.id);
+  try {
+    await provider.upload(plan, filesDir, (info) => {
+      emitJobProgress({ videoId: meta.id, kind: 'upload', pct: info.pct, note: info.note ?? info.file });
+    });
+    log.info(`captions synced to share for ${meta.id} via ${provider.kind}`);
+  } catch (err) {
+    log.warn(`caption sync to share failed for ${meta.id}: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    activeUploads.delete(meta.id);
+  }
 }
 
 /** Delete the remote copy and clear the local share block. */

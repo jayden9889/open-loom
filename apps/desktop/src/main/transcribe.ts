@@ -18,6 +18,7 @@ import * as ffmpeg from './ffmpeg';
 import { createOpenAiEngine, createWhisperEngine, runTranscriptionPipeline } from './transcribe-core';
 import { log } from './logger';
 import { maybeAutoGenerateAI } from './ai';
+import { syncShareCaptions } from './share';
 
 // ---------------------------------------------------------------------------
 // whisper.cpp discovery
@@ -134,6 +135,10 @@ export async function transcribeVideo(id: string): Promise<void> {
   } finally {
     inFlight.delete(id);
   }
+
+  // Captions land after auto-share on stop has already uploaded, so push the
+  // fresh track to the live share copy (no-op when the video is not shared).
+  void syncShareCaptions(id).catch((err) => log.warn(`caption share sync failed: ${String(err)}`));
 
   // Chain AI generation when configured (SPEC A1 auto-run after transcription).
   void maybeAutoGenerateAI(id).catch((err) => log.warn(`auto AI after transcription failed: ${String(err)}`));

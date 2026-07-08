@@ -32,6 +32,18 @@ body {
   object-fit: cover;
 }
 
+/* Full-frame camera layout: the window covers the whole display, so drop the
+   circle, border and drag region and hide the size controls. */
+.bubble.full {
+  border-radius: 0;
+  border: none;
+  -webkit-app-region: no-drag;
+}
+
+.bubble.full .bubble-controls {
+  display: none;
+}
+
 .bubble-off {
   position: absolute;
   inset: 0;

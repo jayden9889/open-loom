@@ -400,10 +400,14 @@ const WATCH_JS = String.raw`
     ccBtn.addEventListener('click', function () { setCaptions(!ccOn); });
   }
 
-  // fullscreen
+  // fullscreen (iPhone Safari only exposes fullscreen on the <video> element)
   fsBtn.addEventListener('click', function () {
     var box = $('ol-videobox');
-    if (document.fullscreenElement) { document.exitFullscreen(); } else { box.requestFullscreen(); }
+    if (document.fullscreenElement) { document.exitFullscreen(); return; }
+    if (document.webkitFullscreenElement) { document.webkitExitFullscreen(); return; }
+    if (box.requestFullscreen) { box.requestFullscreen(); }
+    else if (box.webkitRequestFullscreen) { box.webkitRequestFullscreen(); }
+    else if (video.webkitEnterFullscreen) { video.webkitEnterFullscreen(); }
   });
 
   // keyboard
@@ -565,6 +569,7 @@ const WATCH_JS = String.raw`
         var label = $('ol-replying');
         esc(label, 'Replying to ' + c.author);
         label.style.display = '';
+        $('ol-replycancel').style.display = '';
         $('ol-ctext').focus();
       });
       actions.appendChild(reply);
@@ -628,13 +633,16 @@ const WATCH_JS = String.raw`
         textInput.value = '';
         replyTo = null;
         $('ol-replying').style.display = 'none';
+        $('ol-replycancel').style.display = 'none';
         loadComments();
       }).catch(function (err) {
         alert(err.message);
       }).finally(function () { postBtn.disabled = false; });
     });
     $('ol-replycancel').addEventListener('click', function () {
-      replyTo = null; $('ol-replying').style.display = 'none';
+      replyTo = null;
+      $('ol-replying').style.display = 'none';
+      $('ol-replycancel').style.display = 'none';
     });
   }
 
@@ -727,7 +735,7 @@ export function renderWatchPage(data: WatchPageData): string {
     <div class="row">
       <input id="ol-cname" type="text" placeholder="Your name" maxlength="80" aria-label="Your name">
       <span class="c-when" id="ol-replying" style="display:none"></span>
-      <button type="button" class="c-reply-btn" id="ol-replycancel">Cancel reply</button>
+      <button type="button" class="c-reply-btn" id="ol-replycancel" style="display:none">Cancel reply</button>
     </div>
     <textarea id="ol-ctext" placeholder="Leave a comment" maxlength="5000" aria-label="Comment text"></textarea>
     <div class="row">
@@ -849,7 +857,7 @@ export function renderPasswordPage(videoId: string, embed: boolean): string {
   form.addEventListener('submit', function (e) {
     e.preventDefault();
     errorEl.textContent = '';
-    fetch('/v/${videoId}/unlock', {
+    fetch('/v/${videoId}/unlock${embed ? '?embed=1' : ''}', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ password: input.value }),

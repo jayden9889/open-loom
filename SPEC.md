@@ -26,7 +26,7 @@ require a written note in `docs/DECISIONS.md`.
 | Transcription | Pluggable engine: (1) **whisper.cpp** local — detect `whisper-cli` at configured path; `scripts/setup-whisper.sh` clones + builds + downloads `base.en` (Metal on mac); (2) any **OpenAI-compatible** `/v1/audio/transcriptions` endpoint (BYO key); (3) off | No Homebrew assumption. Local-first, private by default. |
 | AI features | BYO provider: **Anthropic API**, **OpenAI-compatible**, or **Ollama** (local). Generates title, summary, chapters, action items from transcript. Keys via Electron `safeStorage`, never in repo | Loom AI parity without shipping secrets. |
 | Sharing default | Provider adapter. Providers: `openloom-server` (full loop), `s3` (R2/B2/MinIO/AWS, static share page), `none` (local only). Share URL is **minted and copied to clipboard the moment recording stops**; upload runs in background with progress + retry (Loom's "instant link" trick) | YouTube API is DEAD as default: unverified-project uploads are force-locked private (no appeal) + ~100 uploads/day/project. Drive locks popular files for 24h. R2 egress is free. |
-| Server | `packages/server`: **Hono + better-sqlite3**, single Docker container / `npx openloom-server`, API-key auth for the creator app, anonymous viewers | The full Loom loop (comments/reactions/analytics) needs a write path; keep it tiny and one-command. |
+| Server | `packages/server`: **Hono + better-sqlite3**, single Docker container (or run from source), API-key auth for the creator app, anonymous viewers | The full Loom loop (comments/reactions/analytics) needs a write path; keep it tiny and one-command. |
 | License | **MIT** for everything in this repo | Max adoption; we bundle no GPL binaries. |
 | Platforms | macOS 14.2+ first-class (dev machine = macOS 26). Windows/Linux: code paths kept portable (no hard mac-only APIs without guards), but v1 is only *tested* on macOS | Honest scope. |
 
@@ -76,8 +76,8 @@ open-loom/
 - **R3. Devices:** camera + mic dropdowns (enumerateDevices), persisted. Mic level meter in picker. Camera/mic can each be off.
 - **R4. System audio toggle** (loopback) mixed with mic. Disabled + tooltip on unsupported OS.
 - **R5. Countdown** 3-2-1 overlay (setting, default on, skippable by click).
-- **R6. Camera bubble:** circular, S(160)/M(240)/L(320px), draggable anywhere, size switcher on hover, mirror toggle, hide/show mid-recording. Shown in Screen+Camera mode whenever camera is on.
-- **R7. HUD control bar** (frameless, always-on-top, left-center of screen, draggable): elapsed timer (red dot), pause/resume, stop (finish), restart, cancel/trash, camera on/off, mic mute, draw toggle. Tooltips + shortcut hints.
+- **R6. Camera bubble + live layout switch:** circular, S(160)/M(240)/L(320px), draggable anywhere, size switcher on hover, mirror toggle, hide/show mid-recording. Shown in Screen+Camera mode whenever camera is on. **Layout is switchable at any time during a recording between Screen+Camera (bubble), Camera (camera fills the whole frame, full face) and Screen only** — the signature "flip to full face to connect, back to screen to show" move. Full-display capture realises this by resizing the bubble window (circle ↔ full-screen opaque cover ↔ hidden); window-capture realises it in the canvas compositor. cam-only mode is already full face.
+- **R7. HUD control bar** (frameless, always-on-top, left-center of screen, draggable): elapsed timer (red dot), pause/resume, stop (finish), restart, cancel/trash, camera on/off, camera-layout cycle (Screen+Camera → Camera → Screen only), mic mute, draw toggle. Tooltips + shortcut hints.
 - **R8. Recording engine:** MediaRecorder, 1s timeslice, quality presets 720p/1080p/4K@30fps (bitrates ~5/8/20 Mbps), pause/resume support, max-duration guard (setting, default off), crash-safe: chunks land in temp file continuously; recovery on next launch offers to restore.
 - **R9. Global shortcuts** (configurable): ⌘⇧L start/stop, ⌥⇧P pause/resume, ⌥⇧C cancel, ⌘⇧R restart. Registered app-wide (globalShortcut), also work when app hidden.
 - **R10. Drawing tool:** during full-screen recording, transparent overlay canvas; pen strokes (red, 4px, glow-free), strokes fade after 3s; ⌘⇧D toggles; cursor becomes crosshair. In window-capture mode the draw button is disabled with tooltip (not captured).
@@ -114,9 +114,10 @@ open-loom/
 - **S4. Share dialog** (Watch → Share): provider status, link with copy button, privacy (server: link-only / password), CTA button (label+URL), toggles: allow comments, allow reactions, allow download (server enforces), “Delete remote copy”.
 - **S5. Embed:** copy `<iframe>` snippet (server watch page supports `?embed=1` chromeless).
 - **S6. YouTube:** explicitly NOT a provider. `docs/SHARING.md` explains why (verified: unverified-API-project uploads locked private, ~100/day cap) + manual-upload guidance. This answers “why not YouTube unlisted”.
+- **S7. Publish to YouTube (unlisted), guided manual, shipped v1:** a Watch-view helper that is deliberately NOT an API integration (per S6, unaudited-API uploads are force-locked to private with no appeal). On click the main process reveals `video.mp4` in Finder and opens `youtube.com/upload` in the default browser (reusing the existing reveal + open-external primitives), and copies the AI title to the clipboard when one exists. A small inline panel walks the three manual steps (drop the video, set Visibility to Unlisted, paste the link). The pasted link is validated by the pure, unit-tested `parseYouTubeUrl` (`apps/desktop/src/main/youtube-core.ts`), normalised to a canonical `watch?v=` URL, stored on `VideoMeta.youtubeUrl`, shown as the recording's shareable link with a Copy button, and copied to the clipboard. IPC: `youtubePublishStart(videoId)` and `youtubeSaveLink(videoId, url)` (additive to section 5; see docs/DECISIONS.md).
 
 ### Server (packages/server) — the full Loom loop, self-hosted
-- **V1. Run:** `docker compose up -d` or `npx openloom-server`; env: `PORT`, `DATA_DIR`, `API_KEY` (creator auth), `BASE_URL`, `MAX_UPLOAD_MB`. SQLite + files on a volume. `GET /healthz`.
+- **V1. Run:** `docker compose up -d` (or from source: `npm run build && node bin/openloom-server.js`); env: `PORT`, `DATA_DIR`, `API_KEY` (creator auth), `BASE_URL`, `MAX_UPLOAD_MB`. SQLite + files on a volume. `GET /healthz`.
 - **V2. Watch page** `/v/:id`: sleek Apple-style page (SSR + vanilla JS, self-contained, responsive, light/dark): player (same controls/speeds as app), title, creator name, date, chapters, transcript panel with seek, captions, CTA button, download (if allowed), emoji reaction bar (👍 ❤️ 😂 🎉 👀 +count, one per viewer per emoji, anonymous ok), timestamped comments (name remembered in localStorage, text + optional timestamp chip that seeks; threaded 1 level; creator can delete via key), view counting.
 - **V3. Analytics:** view = unique session beacon; progress beacons at 5s cadence → per-video: total views, unique viewers, completion rate, per-viewer sessions (name if given, else Anonymous), views-over-time (day buckets); heat strip of watch coverage. Exposed to app via authed API → Watch “Activity” tab renders it (Insights parity).
 - **V4. Privacy:** link-only by default; optional password (argon2/bcrypt hash; cookie session per video); optional disable comments/reactions/download per video; delete video removes files + rows.
@@ -156,6 +157,7 @@ interface VideoMeta {
   share?: { provider: 'server'|'s3'; url: string; uploadedAt?: string;
             privacy: 'link'|'password'; allowComments: boolean; allowReactions: boolean;
             allowDownload: boolean; cta?: { label: string; url: string } };
+  youtubeUrl?: string;   // canonical watch?v= link from the guided YouTube helper (S7)
   transcript?: { language: string; engine: string };
   ai?: { title?: string; summary?: string;
          chapters?: { t: number; title: string }[];

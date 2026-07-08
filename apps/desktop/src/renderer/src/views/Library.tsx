@@ -40,6 +40,11 @@ function VideoCard({
   const thumb = window.openloom.fileUrl(video.id, 'thumb.jpg');
   const gif = window.openloom.fileUrl(video.id, 'preview.gif');
   const uploading = upload !== undefined && !upload.failed;
+  // A share block with no uploadedAt is a link that was minted (and possibly
+  // copied) but whose upload never landed: it is a dead 404 until retried. This
+  // persists across navigation and restart, unlike the in-memory `upload` state.
+  const notLive = !!video.share && !video.share.uploadedAt;
+  const showRetry = (upload?.failed ?? false) || (notLive && !uploading);
 
   return (
     <div
@@ -72,11 +77,11 @@ function VideoCard({
         </button>
         <div className="video-sub">
           <span>{formatDate(video.createdAt)}</span>
-          {upload?.failed ? (
+          {showRetry ? (
             <button
               type="button"
               className="badge badge-failed"
-              title="Upload failed. Click to retry."
+              title="This share link is not live yet - the upload did not finish. Click to retry."
               onClick={onRetryUpload}
             >
               <Icon.Refresh width={12} height={12} />

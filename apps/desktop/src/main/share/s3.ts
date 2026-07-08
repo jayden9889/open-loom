@@ -139,6 +139,20 @@ export class S3ShareProvider implements ShareProvider {
     });
   }
 
+  /**
+   * Upload plan carrying only the captions object plus a rebuilt player page,
+   * pointed at this video's existing keys. Used to add captions to an
+   * already-published static share once transcription finishes, without
+   * re-uploading the (potentially multi-GB) video.
+   */
+  captionsPlan(meta: VideoMeta): UploadPlan {
+    const files: UploadPlanFile[] = [
+      { name: 'transcript.vtt', remote: this.keyFor(meta.id, 'captions.vtt'), required: false },
+      { name: 'index.html', remote: this.keyFor(meta.id, 'index.html'), required: true },
+    ];
+    return { videoId: meta.id, files, context: { meta: JSON.parse(JSON.stringify(meta)) as VideoMeta } };
+  }
+
   private async putObject(key: string, body: Buffer | string, contentType: string): Promise<void> {
     await this.client().send(
       new PutObjectCommand({

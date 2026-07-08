@@ -18,8 +18,19 @@ serve({ fetch: server.app.fetch, port: cfg.port, hostname: '0.0.0.0' }, (info) =
   if (cfg.apiKeyGenerated) {
     console.log('[openloom-server] no API_KEY was set, so one was generated and saved to');
     console.log(`[openloom-server]   ${cfg.dataDir}/api-key.txt`);
-    console.log(`[openloom-server] API key: ${cfg.apiKey}`);
-    console.log('[openloom-server] paste it into OpenLoom Settings then Sharing.');
+  }
+  // Print the key on EVERY boot so a self-hoster can always find it (a supplied
+  // key never lands in api-key.txt, so this log line is the only reliable place).
+  console.log(`[openloom-server] API key: ${cfg.apiKey}`);
+  console.log('[openloom-server] paste it into OpenLoom Settings then Sharing.');
+
+  // A bare IP or localhost makes for a shady-looking share link; nudge towards a
+  // real domain + HTTPS, which the watch pages and unlock cookies are built for.
+  if (/^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\d{1,3}(\.\d{1,3}){3})(:\d+)?$/i.test(cfg.baseUrl)) {
+    console.warn(
+      '[openloom-server] BASE_URL is a bare host. Set BASE_URL to a real domain over HTTPS ' +
+        '(e.g. https://videos.example.com) for credible, shareable links.'
+    );
   }
 });
 

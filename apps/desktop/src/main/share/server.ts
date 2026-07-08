@@ -52,6 +52,17 @@ function humanFetchError(action: string, err: unknown): Error {
   return new Error(`Could not ${action}: ${detail}. Check the server URL in Settings, then Sharing.`);
 }
 
+/**
+ * Recover the remote video id from a `/v/:id` share URL, falling back to the
+ * local id. Used to reuse an already-created remote row on retry / caption
+ * re-sync so we never POST a fresh create (which the server answers with a
+ * brand-new id, orphaning the first row and killing the copied link).
+ */
+export function remoteIdFromShareUrl(url: string | undefined, fallback: string): string {
+  const match = url ? /\/v\/([A-Za-z0-9_-]+)/.exec(url) : null;
+  return match?.[1] ?? fallback;
+}
+
 export class ServerShareProvider implements ShareProvider {
   readonly kind = 'server' as const;
 
@@ -110,6 +121,31 @@ export class ServerShareProvider implements ShareProvider {
     const shareUrl = typeof created.shareUrl === 'string' ? created.shareUrl : `${this.base()}/v/${remoteId}`;
     const files: UploadPlanFile[] = FILE_MAP.map((f) => ({ name: f.local, remote: f.remote, required: f.required }));
     return { shareUrl, uploadPlan: { videoId: meta.id, files, context: { remoteId } } };
+  }
+
+  /**
+   * Build an upload plan for a video that already has a remote row (retry after
+   * a failed upload, or a re-share) WITHOUT creating a fresh one. Reuses the
+   * existing remote id so the previously copied link keeps working and no
+   * orphan row is minted.
+   */
+  resumeShare(meta: VideoMeta): ShareResult {
+    const remoteId = remoteIdFromShareUrl(meta.share?.url, meta.id);
+    const shareUrl = meta.share?.url || `${this.base()}/v/${remoteId}`;
+    const files: UploadPlanFile[] = FILE_MAP.map((f) => ({ name: f.local, remote: f.remote, required: f.required }));
+    return { shareUrl, uploadPlan: { videoId: meta.id, files, context: { remoteId } } };
+  }
+
+  /**
+   * Upload plan carrying only the captions track, pointed at the existing
+   * remote id. Auto-share on stop fires before transcription finishes, so the
+   * hosted page ships without captions; this pushes transcript.vtt to the live
+   * share once it exists. video.mp4 is not re-listed, so nothing large moves.
+   */
+  captionsPlan(meta: VideoMeta): UploadPlan {
+    const remoteId = remoteIdFromShareUrl(meta.share?.url, meta.id);
+    const files: UploadPlanFile[] = [{ name: 'transcript.vtt', remote: 'captions.vtt', required: false }];
+    return { videoId: meta.id, files, context: { remoteId } };
   }
 
   private remoteId(plan: UploadPlan): string {

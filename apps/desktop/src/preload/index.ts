@@ -7,6 +7,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type {
   BubbleSize,
+  CameraLayout,
   EngineBeginPayload,
   JobProgress,
   OpenLoomAPI,
@@ -48,6 +49,7 @@ const api: OpenLoomAPI = {
   toggleMic: (on: boolean) => ipcRenderer.send('ol:toggleMic', on),
   toggleDraw: (on: boolean) => ipcRenderer.send('ol:toggleDraw', on),
   setBubbleSize: (s: BubbleSize) => ipcRenderer.send('ol:setBubbleSize', s),
+  setLayout: (layout: CameraLayout) => ipcRenderer.send('ol:setLayout', layout),
 
   // library
   listVideos: () => ipcRenderer.invoke('ol:listVideos'),
@@ -87,6 +89,10 @@ const api: OpenLoomAPI = {
   testShareProvider: (cfg: unknown) => ipcRenderer.invoke('ol:testShareProvider', cfg),
   deleteShareComment: (videoId: string, commentId: string) =>
     ipcRenderer.invoke('ol:deleteShareComment', videoId, commentId),
+
+  // publish to YouTube (guided manual, unlisted)
+  youtubePublishStart: (videoId: string) => ipcRenderer.invoke('ol:youtubePublishStart', videoId),
+  youtubeSaveLink: (videoId: string, url: string) => ipcRenderer.invoke('ol:youtubeSaveLink', videoId, url),
 
   // settings & system
   getSettings: () => ipcRenderer.invoke('ol:getSettings'),
@@ -140,8 +146,10 @@ const internal: OpenLoomInternal = {
   onEngineResume: subscribeVoid('engine:resume'),
   onEngineCancel: subscribeVoid('engine:cancel'),
   onEngineSetCamera: subscribe<boolean>('engine:set-camera'),
+  onEngineSetLayout: subscribe<CameraLayout>('engine:set-layout'),
   onEngineSetMic: subscribe<boolean>('engine:set-mic'),
   onEngineSetBubble: subscribe<{ size: BubbleSize; mirror: boolean }>('engine:set-bubble'),
+  onBubbleLayout: subscribe<CameraLayout>('bubble:set-layout'),
 
   countdownDone: () => ipcRenderer.send('countdown:done'),
   countdownCancel: () => ipcRenderer.send('countdown:cancel'),

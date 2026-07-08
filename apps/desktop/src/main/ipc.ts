@@ -3,7 +3,7 @@
  * (SPEC section 5).
  */
 import { app, clipboard, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
-import type { RecordingOptions, Settings, VideoMeta } from '@shared/types';
+import type { CameraLayout, RecordingOptions, Settings, VideoMeta } from '@shared/types';
 import { listCaptureSources } from './capture';
 import { library, revealVideo, fileUrl, setCustomThumbnail } from './library';
 import * as recorder from './recorder-ipc';
@@ -23,6 +23,7 @@ import {
   testShareProvider,
   deleteShareComment,
 } from './share';
+import { youtubePublishStart, youtubeSaveLink } from './youtube';
 import { log } from './logger';
 
 function handle(channel: string, fn: (event: IpcMainInvokeEvent, ...args: any[]) => unknown): void {
@@ -49,6 +50,7 @@ export function registerIpc(): void {
   ipcMain.on('ol:toggleCamera', (_e, on: boolean) => recorder.toggleCamera(on));
   ipcMain.on('ol:toggleMic', (_e, on: boolean) => recorder.toggleMic(on));
   ipcMain.on('ol:toggleDraw', (_e, on: boolean) => recorder.toggleDraw(on));
+  ipcMain.on('ol:setLayout', (_e, layout: CameraLayout) => recorder.setLayout(layout));
   ipcMain.on('ol:setBubbleSize', (_e, size: 'S' | 'M' | 'L') => {
     setSettings({ bubble: { size } } as Partial<Settings>);
     recorder.setBubbleSize(size);
@@ -96,6 +98,10 @@ export function registerIpc(): void {
   handle('ol:getShareActivity', (_e, id: string) => getShareActivity(id));
   handle('ol:testShareProvider', (_e, cfg: unknown) => testShareProvider(cfg));
   handle('ol:deleteShareComment', (_e, id: string, commentId: string) => deleteShareComment(id, commentId));
+
+  // -- publish to YouTube (guided manual, unlisted) ----------------------------
+  handle('ol:youtubePublishStart', (_e, id: string) => youtubePublishStart(id));
+  handle('ol:youtubeSaveLink', (_e, id: string, url: string) => youtubeSaveLink(id, url));
 
   // -- settings & system -------------------------------------------------------
   handle('ol:getSettings', () => getSettingsMasked());

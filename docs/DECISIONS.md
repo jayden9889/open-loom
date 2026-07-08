@@ -3,6 +3,19 @@
 Deviations from SPEC.md and notable build-time decisions land here, newest first.
 Format: date · decision · why.
 
+- 2026-07-08 · Publish to YouTube (unlisted) helper (SPEC S7; additive to sections 4 + 5, no
+  breaking changes). A guided MANUAL publish on the Watch view - not a share provider and not an
+  API integration - because uploads through an unaudited YouTube API project are force-locked to
+  private with no appeal (see S6). New IPC `youtubePublishStart(videoId)` reveals `video.mp4` (via
+  the existing `revealVideo` / `shell.showItemInFolder`) and opens `youtube.com/upload` (via the
+  existing `shell.openExternal`), copying the AI title to the clipboard when present;
+  `youtubeSaveLink(videoId, url)` validates the pasted link with the pure, unit-tested
+  `parseYouTubeUrl` (`apps/desktop/src/main/youtube-core.ts`), normalises it to a canonical
+  `watch?v=` URL, and persists it through the existing library update path. `VideoMeta` gains
+  `youtubeUrl?: string`. The renderer adds a header button next to Reveal/Share plus an inline
+  three-step panel in the Watch details side-panel, then renders the saved link with a Copy button.
+  No new dependencies.
+
 - 2026-07-07 · Pre-publication security hardening (no behaviour change to the shipping app):
   (1) Every Electron window (main, HUD, bubble, countdown, draw, engine) now runs through
   `applyNavigationGuards` in `apps/desktop/src/main/windows.ts`: `setWindowOpenHandler` denies all

@@ -2373,3 +2373,26 @@ textarea {
   max-height: 260px;
   margin-bottom: var(--ol-space-4);
 }
+
+/* Publish to YouTube (unlisted) helper - reuses .ai-block for the container. */
+.youtube-steps {
+  margin: 0;
+  padding-left: 1.25em;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ol-space-1);
+  font-size: var(--ol-text-sm);
+  color: var(--ol-text-secondary);
+}
+
+.youtube-link {
+  font-size: var(--ol-text-sm);
+  color: var(--ol-accent);
+  word-break: break-all;
+}
+
+.youtube-error {
+  margin: 0;
+  font-size: var(--ol-text-sm);
+  color: var(--ol-danger);
+}

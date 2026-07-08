@@ -91,7 +91,7 @@ describe('CRUD', () => {
     expect(store.list()).toEqual([]);
   });
 
-  it('duplicates files and strips share state', () => {
+  it('duplicates files and strips share state', async () => {
     seedVideo('aaa', {
       share: {
         provider: 'server',
@@ -102,7 +102,7 @@ describe('CRUD', () => {
         allowDownload: true,
       },
     });
-    const copy = store.duplicate('aaa');
+    const copy = await store.duplicate('aaa');
     expect(copy.id).not.toBe('aaa');
     expect(copy.title).toBe('Video aaa copy');
     expect(copy.share).toBeUndefined();

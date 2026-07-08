@@ -82,11 +82,24 @@ export function videosRoutes(ctx: AppCtx): Hono {
         ? body.creator.trim().slice(0, 120)
         : ctx.cfg.creatorName || null;
 
+    // Password invariant (mirrors PATCH): 'password' privacy is only honoured
+    // when a password is actually set in the same request. Without one we fall
+    // back to 'link' so makeIsUnlocked never reports a null-hash video as
+    // protected while streaming it to every link holder.
+    let passwordHash: string | null = null;
+    if (typeof body.password === 'string' && body.password.length > 0) {
+      if (body.password.length < 4) {
+        return c.json({ error: 'Password must be at least 4 characters.' }, 400);
+      }
+      passwordHash = bcrypt.hashSync(body.password, 10);
+    }
+    const privacy = body.privacy === 'password' && passwordHash ? 'password' : 'link';
+
     ctx.db
       .prepare(
         `INSERT INTO videos (id, title, description, creator, created_at, duration_sec, width, height,
-           size_bytes, status, privacy, allow_comments, allow_reactions, allow_download, chapters_json, files_dir)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'processing', ?, ?, ?, ?, ?, ?)`
+           size_bytes, status, privacy, password_hash, allow_comments, allow_reactions, allow_download, chapters_json, files_dir)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'processing', ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
@@ -98,7 +111,8 @@ export function videosRoutes(ctx: AppCtx): Hono {
         asNumber(body.width),
         asNumber(body.height),
         asNumber(body.sizeBytes),
-        body.privacy === 'password' ? 'password' : 'link',
+        privacy,
+        passwordHash,
         asBoolInt(body.allowComments, 1),
         asBoolInt(body.allowReactions, 1),
         asBoolInt(body.allowDownload, 1),

@@ -140,19 +140,24 @@ provider in Settings, then Sharing.
 Nothing leaves your disk. You can still trim, transcribe, and reveal the MP4 to attach it to email or
 drop it into any tool by hand.
 
-### Self-hosted share server (two commands)
+### Self-hosted share server
 
-The `openloom-server` package is a small Hono and SQLite container that delivers the full loop:
-hosted watch page, comments, reactions, analytics and password protection.
+`openloom-server` is a small Hono and SQLite service that delivers the full loop: hosted watch page,
+comments, reactions, analytics and password protection.
 
 ```bash
 cd packages/server
-API_KEY=$(openssl rand -base64 24) BASE_URL=https://videos.example.com docker compose up -d
+echo "API_KEY=$(openssl rand -base64 24)" > .env
+echo "BASE_URL=https://videos.example.com" >> .env
+docker compose up -d
 ```
 
-Put the printed `API_KEY` and your server URL into Settings, then Sharing, then use Test to confirm
-the app can reach it. Full walkthrough, including running behind a reverse proxy and backups, is in
-[docs/SELF-HOSTING.md](docs/SELF-HOSTING.md).
+Docker Compose reads `.env` automatically, so the key stays in a file that can be checked again
+(`cat .env`) rather than only in scrolled-past terminal output. Put the same `API_KEY` and `BASE_URL`
+into Settings, then Sharing, then use Test to confirm the app can reach it. A link only becomes
+trustworthy once that domain is actually pointed at the box with HTTPS in front of it; the
+recommended setup, a subdomain and automatic HTTPS with Caddy, plus the from-source path and
+backups, is the full walkthrough in [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md).
 
 ### Cloudflare R2 (about five minutes)
 

@@ -8,6 +8,7 @@ import type { Context } from 'hono';
 import type { AppCtx } from '../context.js';
 import { getVideo, type VideoRow } from '../db.js';
 import { REACTION_EMOJI, SESSION_RE, nowIso } from '../util.js';
+import { clientIp, type Limiters } from '../rate-limit.js';
 
 export function reactionCounts(ctx: AppCtx, videoId: string, sessionId?: string): {
   counts: Record<string, number>;
@@ -28,7 +29,11 @@ export function reactionCounts(ctx: AppCtx, videoId: string, sessionId?: string)
   return { counts, mine };
 }
 
-export function reactionsRoutes(ctx: AppCtx, isUnlocked: (c: Context, video: VideoRow) => boolean): Hono {
+export function reactionsRoutes(
+  ctx: AppCtx,
+  isUnlocked: (c: Context, video: VideoRow) => boolean,
+  limiters: Limiters
+): Hono {
   const app = new Hono();
 
   app.get('/:id/reactions', (c) => {
@@ -44,6 +49,9 @@ export function reactionsRoutes(ctx: AppCtx, isUnlocked: (c: Context, video: Vid
     if (!video) return c.json({ error: 'Video not found.' }, 404);
     if (!isUnlocked(c, video)) return c.json({ error: 'This video is password protected.' }, 403);
     if (video.allow_reactions !== 1) return c.json({ error: 'Reactions are turned off for this video.' }, 403);
+    if (!limiters.reactions.allow(`${clientIp(c)}:${video.id}`)) {
+      return c.json({ error: 'You are reacting too fast. Wait a moment and try again.' }, 429);
+    }
 
     let body: Record<string, unknown>;
     try {

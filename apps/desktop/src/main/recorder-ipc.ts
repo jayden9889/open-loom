@@ -10,6 +10,7 @@ import { nanoid } from 'nanoid';
 import fs from 'node:fs';
 import path from 'node:path';
 import type {
+  CameraLayout,
   RecordingMode,
   RecordingOptions,
   RecordingState,
@@ -28,7 +29,11 @@ import {
   displayForSource,
   getDrawWindow,
   getOrCreateEngineWindow,
+  positionBubbleCircle,
+  raiseHud,
   resizeBubbleKeepAnchor,
+  setBubbleFullScreen,
+  setBubbleLayout,
   setBubbleVisible,
   setDrawInteractive,
   showBubble,
@@ -41,6 +46,7 @@ import * as ffmpeg from './ffmpeg';
 import { shareVideo } from './share';
 import { library } from './library';
 import { maybeAutoTranscribe } from './transcribe';
+import { generatePreviews } from './preview-core';
 
 interface ActiveRecording {
   tempId: string;
@@ -56,6 +62,10 @@ interface ActiveRecording {
   mimeType: string;
   display: Display;
   cameraOn: boolean;
+  /** Live camera layout for Screen+Camera recordings. */
+  cameraLayout: CameraLayout;
+  /** Last non-off layout, so camera on/off restores the previous look. */
+  lastCamLayout: Exclude<CameraLayout, 'off'>;
   micOn: boolean;
   drawOn: boolean;
   cancelled: boolean;
@@ -82,6 +92,7 @@ function emitState(partial?: Partial<RecordingState>): void {
       elapsedSec: elapsedSec(active),
       mode: active.opts.mode,
       cameraOn: active.cameraOn,
+      cameraLayout: active.cameraLayout,
       micOn: active.micOn,
       drawOn: active.drawOn,
       drawAvailable: active.opts.mode !== 'cam' && !!active.opts.sourceIsDisplay,
@@ -181,6 +192,8 @@ export async function startRecording(opts: RecordingOptions): Promise<void> {
     mimeType: '',
     display,
     cameraOn: opts.cameraOn,
+    cameraLayout: opts.mode === 'screen-cam' && opts.cameraOn ? 'bubble' : 'off',
+    lastCamLayout: 'bubble',
     micOn: opts.micOn,
     drawOn: false,
     cancelled: false,
@@ -450,6 +463,8 @@ async function startRecordingWithoutCountdown(opts: RecordingOptions): Promise<v
     mimeType: '',
     display,
     cameraOn: opts.cameraOn,
+    cameraLayout: opts.mode === 'screen-cam' && opts.cameraOn ? 'bubble' : 'off',
+    lastCamLayout: 'bubble',
     micOn: opts.micOn,
     drawOn: false,
     cancelled: false,
@@ -485,16 +500,60 @@ async function hardResetSession(): Promise<void> {
 export function toggleCamera(on: boolean): void {
   const rec = active;
   if (!rec) return;
-  rec.cameraOn = on;
-  getOrCreateEngineWindow().webContents.send('engine:set-camera', on);
-  if (rec.opts.mode === 'screen-cam') {
-    if (on) {
-      showBubble(rec.display, getSettings().bubble.size);
-    } else {
-      setBubbleVisible(false);
-    }
+  // Camera on/off maps onto the layout: off = 'Screen only', on = restore the
+  // last camera layout (bubble or full).
+  applyLayout(rec, on ? rec.lastCamLayout : 'off');
+}
+
+/** Switch the live camera layout mid-recording (Screen+Camera recordings only). */
+export function setLayout(layout: CameraLayout): void {
+  const rec = active;
+  if (!rec) return;
+  applyLayout(rec, layout);
+}
+
+/**
+ * Apply a camera layout across both capture paths:
+ * - Window-composite: the engine canvas compositor redraws (bubble/full/off).
+ * - Full-display: the bubble is a real OS window the display capture sees, so
+ *   we resize it (circle bottom-left / full-screen cover / hidden).
+ */
+function applyLayout(rec: ActiveRecording, layout: CameraLayout): void {
+  // Only Screen+Camera recordings have a switchable camera. Screen-only has no
+  // camera; cam-only is already full face.
+  if (rec.opts.mode !== 'screen-cam') return;
+  rec.cameraLayout = layout;
+  rec.cameraOn = layout !== 'off';
+  if (layout !== 'off') rec.lastCamLayout = layout;
+
+  getOrCreateEngineWindow().webContents.send('engine:set-layout', layout);
+
+  if (rec.opts.sourceIsDisplay) {
+    applyFullDisplayBubble(rec, layout);
+  } else {
+    // Window-composite: the floating bubble window is only a preview; the
+    // compositor burns the camera in. Mirror visibility, leave shape alone.
+    setBubbleVisible(layout !== 'off');
   }
   emitState();
+}
+
+function applyFullDisplayBubble(rec: ActiveRecording, layout: CameraLayout): void {
+  if (layout === 'off') {
+    setBubbleVisible(false);
+    return;
+  }
+  const size = getSettings().bubble.size;
+  showBubble(rec.display, size);
+  if (layout === 'full') {
+    setBubbleFullScreen(rec.display);
+    // Keep the (capture-excluded) HUD above the full-frame camera so the user
+    // can always switch back.
+    raiseHud();
+  } else {
+    positionBubbleCircle(rec.display, size);
+  }
+  setBubbleLayout(layout);
 }
 
 export function toggleMic(on: boolean): void {
@@ -629,10 +688,15 @@ export async function processCaptureFile(input: {
   fs.mkdirSync(videoDir, { recursive: true });
   const finalPath = path.join(videoDir, 'video.mp4');
 
+  // Producing a valid video.mp4 is the only fatal step. If the transcode/remux
+  // fails we clean up the half-built dir and rethrow (a genuine capture/encode
+  // failure). Everything after this block is best-effort: a preview or probe
+  // hiccup must never delete an already-valid recording.
+  let expectedDuration = input.approxDurationSec;
   try {
     emitState({ status: 'processing', processingNote: 'Preparing video' });
     const probeIn = await ffmpeg.probe(bins, input.chunkFile).catch(() => null);
-    const expectedDuration = probeIn?.durationSec || input.approxDurationSec;
+    expectedDuration = probeIn?.durationSec || input.approxDurationSec;
 
     await ffmpeg.enqueueJob(videoId, probeIn && ffmpeg.canRemux(probeIn) ? 'remux' : 'transcode', async (report) => {
       if (probeIn && ffmpeg.canRemux(probeIn)) {
@@ -645,40 +709,9 @@ export async function processCaptureFile(input: {
         });
       }
     });
-
-    const info = await ffmpeg.probe(bins, finalPath);
-    emitState({ status: 'processing', processingNote: 'Creating preview' });
-
-    await ffmpeg.enqueueJob(videoId, 'thumbnail', async () => {
-      await ffmpeg.thumbnail(bins, finalPath, path.join(videoDir, 'thumb.jpg'), info.durationSec * 0.25);
-    });
-    await ffmpeg.enqueueJob(videoId, 'gif', async () => {
-      await ffmpeg.gifPreview(bins, finalPath, path.join(videoDir, 'preview.gif'));
-    });
-    await ffmpeg.enqueueJob(videoId, 'waveform', async () => {
-      await ffmpeg.waveformPeaks(bins, finalPath, path.join(videoDir, 'waveform.json'));
-    });
-
-    const settings = getSettings();
-    const meta: VideoMeta = {
-      id: videoId,
-      title: formatTitle(settings.namePattern, input.createdAt, input.mode),
-      createdAt: input.createdAt.toISOString(),
-      durationSec: info.durationSec,
-      width: info.width,
-      height: info.height,
-      fps: info.fps,
-      sizeBytes: info.sizeBytes,
-      mode: input.mode,
-      folderId: null,
-    };
-    store.put(meta);
-    // Auto-transcribe after processing when an engine is configured (SPEC T1);
-    // runs in the background and never blocks the Watch view opening.
-    maybeAutoTranscribe(videoId);
-    return videoId;
   } catch (err) {
-    // Leave no half-built library entries behind.
+    // Transcode failed: no valid video was produced, so leave no half-built
+    // library entry behind.
     try {
       fs.rmSync(videoDir, { recursive: true, force: true });
     } catch {
@@ -686,6 +719,53 @@ export async function processCaptureFile(input: {
     }
     throw err;
   }
+
+  // video.mp4 exists and is valid from here on. Probing it for exact dimensions
+  // is best-effort too: fall back to what we know rather than losing the video.
+  const info = await ffmpeg.probe(bins, finalPath).catch(() => null);
+  emitState({ status: 'processing', processingNote: 'Creating preview' });
+
+  const previewDuration = info?.durationSec ?? expectedDuration;
+  await generatePreviews({
+    thumbnail: () =>
+      ffmpeg.enqueueJob(videoId, 'thumbnail', () =>
+        ffmpeg.thumbnail(bins, finalPath, path.join(videoDir, 'thumb.jpg'), previewDuration * 0.25)
+      ),
+    gif: () => ffmpeg.enqueueJob(videoId, 'gif', () => ffmpeg.gifPreview(bins, finalPath, path.join(videoDir, 'preview.gif'))),
+    waveform: () =>
+      ffmpeg.enqueueJob(videoId, 'waveform', async () => {
+        await ffmpeg.waveformPeaks(bins, finalPath, path.join(videoDir, 'waveform.json'));
+      }),
+    warn: (msg) => log.warn(`${videoId}: ${msg}`),
+  });
+
+  let sizeBytes = info?.sizeBytes ?? 0;
+  if (!sizeBytes) {
+    try {
+      sizeBytes = fs.statSync(finalPath).size;
+    } catch {
+      /* keep 0 */
+    }
+  }
+
+  const settings = getSettings();
+  const meta: VideoMeta = {
+    id: videoId,
+    title: formatTitle(settings.namePattern, input.createdAt, input.mode),
+    createdAt: input.createdAt.toISOString(),
+    durationSec: info?.durationSec ?? Math.max(1, Math.round(expectedDuration)),
+    width: info?.width ?? 0,
+    height: info?.height ?? 0,
+    fps: info?.fps ?? 0,
+    sizeBytes,
+    mode: input.mode,
+    folderId: null,
+  };
+  store.put(meta);
+  // Auto-transcribe after processing when an engine is configured (SPEC T1);
+  // runs in the background and never blocks the Watch view opening.
+  maybeAutoTranscribe(videoId);
+  return videoId;
 }
 
 // ---------------------------------------------------------------------------

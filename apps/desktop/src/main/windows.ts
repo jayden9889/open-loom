@@ -4,7 +4,7 @@
  */
 import { BrowserWindow, screen, shell, type Display, type Rectangle } from 'electron';
 import path from 'node:path';
-import { BUBBLE_SIZES, type BubbleSize } from '@shared/types';
+import { BUBBLE_SIZES, type BubbleSize, type CameraLayout } from '@shared/types';
 import { log } from './logger';
 
 const isMac = process.platform === 'darwin';
@@ -170,7 +170,7 @@ function excludeFromCapture(win: BrowserWindow): void {
   }
 }
 
-export const HUD_SIZE = { width: 68, height: 384 };
+export const HUD_SIZE = { width: 68, height: 432 };
 
 /** Frameless control bar, left-center of the recorded display (SPEC R7). */
 export function showHud(display: Display): BrowserWindow {
@@ -242,6 +242,44 @@ export function setBubbleVisible(visible: boolean): void {
   if (!bubbleWindow || bubbleWindow.isDestroyed()) return;
   if (visible) bubbleWindow.showInactive();
   else bubbleWindow.hide();
+}
+
+/**
+ * Grow the bubble window to cover the whole display so full-display capture
+ * records the camera full-frame (the 'full' camera layout, SPEC R6). The
+ * renderer switches to a rectangular opaque cover-fit via setBubbleLayout.
+ */
+export function setBubbleFullScreen(display: Display): void {
+  if (!bubbleWindow || bubbleWindow.isDestroyed()) return;
+  const { bounds } = display;
+  bubbleWindow.setBounds({ x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height });
+  bubbleWindow.showInactive();
+}
+
+/** Restore the bubble window to its circular size, anchored bottom-left of the display. */
+export function positionBubbleCircle(display: Display, size: BubbleSize): void {
+  if (!bubbleWindow || bubbleWindow.isDestroyed()) return;
+  const diameter = BUBBLE_SIZES[size];
+  const { workArea } = display;
+  bubbleWindow.setBounds({
+    x: workArea.x + 24,
+    y: workArea.y + workArea.height - diameter - 24,
+    width: diameter,
+    height: diameter,
+  });
+}
+
+/** Tell the bubble renderer to render as a circle, a full-frame cover, or hide. */
+export function setBubbleLayout(layout: CameraLayout): void {
+  if (!bubbleWindow || bubbleWindow.isDestroyed()) return;
+  const wc = bubbleWindow.webContents;
+  if (wc.isLoading()) wc.once('did-finish-load', () => wc.send('bubble:set-layout', layout));
+  else wc.send('bubble:set-layout', layout);
+}
+
+/** Raise the HUD above the (capture-excluded) full camera so its controls stay reachable. */
+export function raiseHud(): void {
+  if (hudWindow && !hudWindow.isDestroyed()) hudWindow.moveTop();
 }
 
 export function destroyBubble(): void {

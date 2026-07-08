@@ -28,9 +28,35 @@ import {
 import { videoDir } from './videos.js';
 import { reactionCounts } from './reactions.js';
 import { isEmbed } from './embed.js';
+import { clientIp, type Limiters } from '../rate-limit.js';
 
 function cookieName(videoId: string): string {
   return `olv_${videoId}`;
+}
+
+/**
+ * Build the unlock Set-Cookie header. Over HTTPS the cookie is marked Secure;
+ * an embedded (cross-origin iframe) unlock over HTTPS additionally needs
+ * SameSite=None so the browser sends it on the third-party /stream subresource.
+ * Same-origin (non-embed) stays SameSite=Lax; plain HTTP keeps Lax (SameSite=None
+ * without Secure is rejected by browsers, and Secure over HTTP would be dropped).
+ */
+function unlockCookie(videoId: string, token: string, baseUrl: string, embed: boolean): string {
+  const https = baseUrl.startsWith('https://');
+  const attrs = [
+    `${cookieName(videoId)}=${token}`,
+    `Path=/v/${videoId}`,
+    'Max-Age=2592000',
+    'HttpOnly',
+  ];
+  if (https && embed) {
+    attrs.push('SameSite=None', 'Secure');
+  } else if (https) {
+    attrs.push('SameSite=Lax', 'Secure');
+  } else {
+    attrs.push('SameSite=Lax');
+  }
+  return attrs.join('; ');
 }
 
 function readCookie(c: Context, name: string): string | null {
@@ -111,7 +137,11 @@ function streamFile(c: Context, filePath: string, contentType: string, download?
   });
 }
 
-export function watchRoutes(ctx: AppCtx, isUnlocked: (c: Context, video: VideoRow) => boolean): Hono {
+export function watchRoutes(
+  ctx: AppCtx,
+  isUnlocked: (c: Context, video: VideoRow) => boolean,
+  limiters: Limiters
+): Hono {
   const app = new Hono();
 
   app.get('/:id', (c) => {
@@ -156,6 +186,10 @@ export function watchRoutes(ctx: AppCtx, isUnlocked: (c: Context, video: VideoRo
     if (video.privacy !== 'password' || !video.password_hash) {
       return c.json({ ok: true, note: 'This video is not password protected.' });
     }
+    // Throttle guesses per IP+video; the window doubles as a lockout.
+    if (!limiters.unlock.allow(`${clientIp(c)}:${video.id}`)) {
+      return c.json({ error: 'Too many attempts. Try again later.' }, 429);
+    }
     let body: Record<string, unknown>;
     try {
       body = (await c.req.json()) as Record<string, unknown>;
@@ -163,14 +197,12 @@ export function watchRoutes(ctx: AppCtx, isUnlocked: (c: Context, video: VideoRo
       return c.json({ error: 'Send the password as JSON.' }, 400);
     }
     const password = typeof body.password === 'string' ? body.password : '';
-    if (!password || !bcrypt.compareSync(password, video.password_hash)) {
+    // Async compare so a cost-10 bcrypt hash never blocks the single event loop.
+    if (!password || !(await bcrypt.compare(password, video.password_hash))) {
       return c.json({ error: 'That password is not right.' }, 403);
     }
     const token = unlockToken(video.id, video.password_hash);
-    c.header(
-      'set-cookie',
-      `${cookieName(video.id)}=${token}; Path=/v/${video.id}; Max-Age=2592000; SameSite=Lax; HttpOnly`
-    );
+    c.header('set-cookie', unlockCookie(video.id, token, ctx.cfg.baseUrl, isEmbed(c)));
     return c.json({ ok: true });
   });
 

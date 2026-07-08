@@ -8,8 +8,13 @@ import { nanoid } from 'nanoid';
 import type { AppCtx } from '../context.js';
 import { getVideo, type CommentRow, type VideoRow } from '../db.js';
 import { nowIso } from '../util.js';
+import { clientIp, type Limiters } from '../rate-limit.js';
 
-export function commentsRoutes(ctx: AppCtx, isUnlocked: (c: Context, video: VideoRow) => boolean): Hono {
+export function commentsRoutes(
+  ctx: AppCtx,
+  isUnlocked: (c: Context, video: VideoRow) => boolean,
+  limiters: Limiters
+): Hono {
   const app = new Hono();
 
   app.get('/:id/comments', (c) => {
@@ -37,6 +42,9 @@ export function commentsRoutes(ctx: AppCtx, isUnlocked: (c: Context, video: Vide
     if (!video) return c.json({ error: 'Video not found.' }, 404);
     if (!isUnlocked(c, video)) return c.json({ error: 'This video is password protected.' }, 403);
     if (video.allow_comments !== 1) return c.json({ error: 'Comments are turned off for this video.' }, 403);
+    if (!limiters.comments.allow(`${clientIp(c)}:${video.id}`)) {
+      return c.json({ error: 'You are posting too fast. Wait a moment and try again.' }, 429);
+    }
 
     let body: Record<string, unknown>;
     try {
