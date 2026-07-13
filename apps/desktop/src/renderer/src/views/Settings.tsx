@@ -309,14 +309,13 @@ export function SettingsView({
                   ]}
                 />
               </Row>
-              <Row label="Default mode">
+              <Row label="Default mode" note="Your camera is always in the recording; this picks how the launcher opens.">
                 <Segmented
-                  value={s.recording.defaultMode}
+                  value={s.recording.defaultMode === 'cam' ? 'cam' : 'screen-cam'}
                   onChange={(defaultMode) => save({ recording: { ...s.recording, defaultMode } })}
                   options={[
-                    { value: 'screen-cam', label: 'Screen + Cam' },
-                    { value: 'screen', label: 'Screen' },
-                    { value: 'cam', label: 'Camera' },
+                    { value: 'screen-cam', label: 'Screen' },
+                    { value: 'cam', label: 'Full face' },
                   ]}
                 />
               </Row>

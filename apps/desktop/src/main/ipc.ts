@@ -11,7 +11,7 @@ import { getPermissions, requestPermission, openSystemSettings, systemAudioSuppo
 import { getSettingsMasked, setSettings, getSettings } from './settings';
 import { fetchFfmpeg } from './ffmpeg';
 import { validateShortcuts } from './shortcuts';
-import { broadcast, getMainWindow } from './windows';
+import { broadcast, getMainWindow, showLauncher } from './windows';
 import { trimVideo, stitchVideos, revertEdits, confirmEdits } from './editor-jobs';
 import { transcribeVideo, installWhisper } from './transcribe';
 import { generateAI, testAI } from './ai';
@@ -39,6 +39,9 @@ function handle(channel: string, fn: (event: IpcMainInvokeEvent, ...args: any[])
 
 export function registerIpc(): void {
   // -- capture ---------------------------------------------------------------
+  ipcMain.on('ol:openLauncher', () => {
+    if (!recorder.isRecordingActive()) showLauncher();
+  });
   handle('ol:listCaptureSources', () => listCaptureSources());
   handle('ol:startRecording', (_e, opts: RecordingOptions) => recorder.startRecording(opts));
   handle('ol:pauseRecording', () => recorder.pauseRecording());

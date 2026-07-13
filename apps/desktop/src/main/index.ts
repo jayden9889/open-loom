@@ -8,8 +8,9 @@ import { app, BrowserWindow } from 'electron';
 import { registerScheme, installProtocolHandler } from './protocol';
 import { installDisplayMediaHandler } from './capture';
 import { registerIpc } from './ipc';
-import { registerEngineIpc } from './recorder-ipc';
-import { createMainWindow } from './windows';
+import { registerEngineIpc, isRecordingActive } from './recorder-ipc';
+import { createMainWindow, showLauncher } from './windows';
+import { getSettings } from './settings';
 import { installShortcuts, unregisterAllShortcuts } from './shortcuts';
 import { installTray } from './tray';
 import { installClickHighlights, shutdownClickHighlights } from './clicks';
@@ -29,6 +30,7 @@ if (!gotLock) {
 } else {
   app.on('second-instance', () => {
     createMainWindow();
+    if (getSettings().setupComplete && !isRecordingActive()) showLauncher();
   });
 
   app.whenReady().then(() => {
@@ -37,6 +39,9 @@ if (!gotLock) {
     registerIpc();
     registerEngineIpc();
     createMainWindow();
+    // Open straight into the recording launcher (left edge of the screen);
+    // first run stays on the Setup view, which opens the launcher when done.
+    if (getSettings().setupComplete) showLauncher();
     installShortcuts();
     installTray();
     installClickHighlights();
@@ -50,7 +55,10 @@ if (!gotLock) {
   });
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createMainWindow();
+      if (getSettings().setupComplete && !isRecordingActive()) showLauncher();
+    }
   });
 
   app.on('will-quit', () => {

@@ -1,7 +1,8 @@
 /**
  * Main window app shell: translucent sidebar (folders + navigation), view
- * routing (Setup, Library, Watch, Settings), the New-recording panel,
- * recording status strip, crash recovery banner and toasts.
+ * routing (Setup, Library, Watch, Settings), recording status strip, crash
+ * recovery banner and toasts. Recordings start from the floating launcher
+ * panel (its own window, left edge of the screen).
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type {
@@ -19,7 +20,6 @@ import { LibraryView } from './views/Library';
 import { WatchView } from './views/Watch';
 import { EditorView } from './views/Editor';
 import { SettingsView } from './views/Settings';
-import { NewRecordingPanel } from './views/NewRecording';
 
 export type View =
   | { name: 'library'; folderId: string | null }
@@ -42,7 +42,6 @@ function AppInner() {
   const [videos, setVideos] = useState<VideoMeta[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
   const [recState, setRecState] = useState<RecordingState>({ status: 'idle', elapsedSec: 0 });
-  const [recorderOpen, setRecorderOpen] = useState(false);
   const [recoverables, setRecoverables] = useState<RecoverableRecording[]>([]);
   const [booted, setBooted] = useState(false);
 
@@ -95,10 +94,7 @@ function AppInner() {
     const offNav = window.openloomInternal.onNavigate((nav) => {
       if (nav.view === 'settings') setView({ name: 'settings' });
       if (nav.view === 'library') setView({ name: 'library', folderId: null });
-      if (nav.view === 'new-recording') {
-        setView({ name: 'library', folderId: null });
-        setRecorderOpen(true);
-      }
+      if (nav.view === 'new-recording') window.openloom.openLauncher();
     });
     const offSettings = window.openloomInternal.onSettingsChanged((s) => {
       setSettings(s);
@@ -154,6 +150,7 @@ function AppInner() {
           await updateSettings({ setupComplete: true });
           setPermissions(await window.openloom.getPermissions());
           setView({ name: 'library', folderId: null });
+          window.openloom.openLauncher();
         }}
       />
     );
@@ -169,7 +166,7 @@ function AppInner() {
         <button
           type="button"
           className="btn-primary sidebar-record"
-          onClick={() => setRecorderOpen(true)}
+          onClick={() => window.openloom.openLauncher()}
           disabled={isRecording || isProcessing}
         >
           <Icon.Record width={16} height={16} />
@@ -313,7 +310,7 @@ function AppInner() {
             folderId={view.folderId}
             onOpen={(id) => setView({ name: 'watch', id })}
             onChanged={reloadLibrary}
-            onRecord={() => setRecorderOpen(true)}
+            onRecord={() => window.openloom.openLauncher()}
             onOpenSharingSettings={() => setView({ name: 'settings', pane: 'sharing' })}
           />
         )}
@@ -343,14 +340,6 @@ function AppInner() {
           <SettingsView settings={settings} onUpdate={updateSettings} initialPane={view.pane} />
         )}
       </main>
-
-      {recorderOpen && settings && (
-        <NewRecordingPanel
-          settings={settings}
-          onClose={() => setRecorderOpen(false)}
-          onStarted={() => setRecorderOpen(false)}
-        />
-      )}
     </div>
   );
 }

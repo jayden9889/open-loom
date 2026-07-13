@@ -5,6 +5,7 @@
  * naturally.
  */
 import './styles/bubble.css';
+import { getUserMediaResilient } from './media';
 
 const root = document.getElementById('bubble-root')!;
 root.innerHTML = `
@@ -52,7 +53,7 @@ async function startCamera(): Promise<void> {
   mirror = settings.bubble.mirror;
   applyMirror();
   try {
-    currentStream = await navigator.mediaDevices.getUserMedia({
+    currentStream = await getUserMediaResilient({
       video: {
         deviceId: settings.recording.cameraId ? { exact: settings.recording.cameraId } : undefined,
         width: { ideal: 1280 },

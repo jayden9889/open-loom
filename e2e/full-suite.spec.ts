@@ -3,7 +3,8 @@
  *
  * Drives the built Electron app end-to-end with Playwright `_electron`, launched
  * with fake-media Chromium flags on a clean userData profile. Covers: boot,
- * New-recording panel, a real screen-only recording attempt (TCC-tolerant),
+ * the floating recording launcher, a real screen recording attempt (camera
+ * always on, TCC-tolerant),
  * ingest via the app's real recover pipeline, the Watch player (play/seek/speed),
  * trimming (ffprobe-verified), settings persistence across relaunch, the
  * save-folder picker repointing the library root, sharing to a real
@@ -124,6 +125,21 @@ async function setTheme(page: Page, theme: 'light' | 'dark' | 'auto'): Promise<v
   await page.waitForTimeout(220);
 }
 
+// The floating launcher opens alongside the main window on boot, so pick
+// windows by URL instead of relying on creation order.
+async function windowByUrl(app: ElectronApplication, frag: string, timeoutMs = 15_000): Promise<Page> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const win = app.windows().find((w) => w.url().includes(frag));
+    if (win) {
+      await win.waitForLoadState('domcontentloaded');
+      return win;
+    }
+    if (Date.now() > deadline) throw new Error(`window ${frag} did not appear within ${timeoutMs}ms`);
+    await app.waitForEvent('window', { timeout: Math.max(250, deadline - Date.now()) }).catch(() => undefined);
+  }
+}
+
 test('Open Loom full E2E (SPEC §7)', async () => {
   test.setTimeout(360_000);
   fs.mkdirSync(SCREENS, { recursive: true });
@@ -163,8 +179,7 @@ test('Open Loom full E2E (SPEC §7)', async () => {
       ],
       env: { ...process.env, OPENLOOM_USER_DATA: userData, ELECTRON_ENABLE_LOGGING: '1' },
     });
-    const p = await a.firstWindow();
-    await p.waitForLoadState('domcontentloaded');
+    const p = await windowByUrl(a, 'index.html');
     return { app: a, page: p };
   };
 
@@ -222,34 +237,39 @@ test('Open Loom full E2E (SPEC §7)', async () => {
     await shot(page, '03-library-empty-dark.png');
     await setTheme(page, 'light');
 
-    // ------------------------------------------------- new recording panel UI
+    // ------------------------------------------------ recording launcher UI
+    // The launcher is its own floating window (left edge of the screen); it
+    // opens on boot because setupComplete is seeded. Screen mode is the
+    // default and the camera is always part of the recording.
     try {
-      await page.locator('.sidebar-record').click();
-      await page.waitForSelector('.recorder-panel', { timeout: 12_000 });
+      const launcher = await windowByUrl(app, 'launcher.html');
+      await launcher.waitForSelector('.launcher', { timeout: 12_000 });
       // Give source enumeration + device labels a moment.
-      await page.waitForTimeout(1500);
-      const hasSourceGrid = (await page.locator('.source-grid').count()) > 0;
-      const hasCamera = (await page.locator('#nr-camera').count()) > 0;
-      const hasMic = (await page.locator('#nr-mic').count()) > 0;
-      const sourceCards = await page.locator('.source-card').count();
-      const cameraOptions = await page.locator('#nr-camera option').count();
-      const micOptions = await page.locator('#nr-mic option').count();
-      const panelOk = hasSourceGrid && hasCamera && hasMic;
+      await launcher.waitForTimeout(1500);
+      const hasSourceGrid = (await launcher.locator('.source-grid').count()) > 0;
+      const hasCamera = (await launcher.locator('#nr-camera').count()) > 0;
+      const hasMic = (await launcher.locator('#nr-mic').count()) > 0;
+      const hasModeSwitch = (await launcher.locator('.segmented .segment').count()) === 2;
+      const sourceCards = await launcher.locator('.source-card').count();
+      const cameraOptions = await launcher.locator('#nr-camera option').count();
+      const micOptions = await launcher.locator('#nr-mic option').count();
+      const panelOk = hasSourceGrid && hasCamera && hasMic && hasModeSwitch;
       record(
-        'New-recording panel lists screen sources + camera/mic devices',
+        'Launcher lists screen sources + camera/mic devices + 2-mode switch',
         panelOk,
         panelOk ? 'pass' : 'product-bug',
-        `sourceCards=${sourceCards} camera=${hasCamera}(${cameraOptions} opts) mic=${hasMic}(${micOptions} opts)`
+        `sourceCards=${sourceCards} camera=${hasCamera}(${cameraOptions} opts) mic=${hasMic}(${micOptions} opts) modes2=${hasModeSwitch}`
       );
-      await shot(page, '04-new-recording-panel-light.png');
+      await shot(launcher, '04-launcher-light.png');
       await setTheme(page, 'dark');
-      await shot(page, '05-new-recording-panel-dark.png');
+      await shot(launcher, '05-launcher-dark.png');
       await setTheme(page, 'light');
 
       // ---------------------------------------- attempt a real screen recording
-      // Switch to Screen-only and start via the panel button (the real UI path).
-      await page.getByText('Screen only').click().catch(() => undefined);
-      const startBtn = page.getByRole('button', { name: /Start recording/i });
+      // Start via the launcher button (the real UI path). The launcher window
+      // is torn down by the main process once recording begins, so all state
+      // polling happens in the main window.
+      const startBtn = launcher.getByRole('button', { name: /Start recording/i });
       const recAttempt = await attemptRealRecording(app, page, startBtn);
       record(recAttempt.name, recAttempt.ok, recAttempt.classification, recAttempt.detail);
       await shot(page, '06-recording-attempt.png');
@@ -261,11 +281,8 @@ test('Open Loom full E2E (SPEC §7)', async () => {
           /* nothing active */
         }
       });
-      // Close the panel if it is still open.
-      await page.locator('.recorder-panel .btn-secondary', { hasText: 'Cancel' }).click().catch(() => undefined);
-      await page.locator('.modal-close, [aria-label="Close"]').first().click().catch(() => undefined);
     } catch (err) {
-      record('New-recording panel opens', false, 'product-bug', String(err));
+      record('Recording launcher opens', false, 'product-bug', String(err));
     }
 
     // Make sure we are back on a clean Library view before injecting.
@@ -632,7 +649,7 @@ async function attemptRealRecording(
   page: Page,
   startBtn: ReturnType<Page['getByRole']>
 ): Promise<Check> {
-  const name = 'real screen-only recording via the UI (TCC-tolerant)';
+  const name = 'real screen recording via the UI (camera always on, TCC-tolerant)';
   const perms = await page.evaluate(() => window.openloom.getPermissions());
   if (process.platform === 'darwin' && perms.screen !== 'granted') {
     return {

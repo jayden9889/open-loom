@@ -8,6 +8,7 @@
 import type { CameraLayout, EngineBeginPayload } from '@shared/types';
 import { BUBBLE_SIZES } from '@shared/types';
 import { cameraDrawPlan } from './layout';
+import { getUserMediaResilient } from '../media';
 
 const internal = window.openloomInternal;
 
@@ -209,7 +210,7 @@ async function buildSession(p: EngineBeginPayload): Promise<{
 
   if (opts.mode === 'cam') {
     const dims = CAM_DIMENSIONS[opts.quality] ?? CAM_DIMENSIONS['1080p']!;
-    const camStream = await navigator.mediaDevices.getUserMedia({
+    const camStream = await getUserMediaResilient({
       video: {
         deviceId: opts.cameraId ? { exact: opts.cameraId } : undefined,
         width: { ideal: dims.width },
@@ -248,7 +249,7 @@ async function buildSession(p: EngineBeginPayload): Promise<{
 
     let micStream: MediaStream | null = null;
     if (opts.micOn) {
-      micStream = await navigator.mediaDevices.getUserMedia({
+      micStream = await getUserMediaResilient({
         audio: {
           deviceId: opts.micId ? { exact: opts.micId } : undefined,
           echoCancellation: true,
@@ -285,7 +286,7 @@ async function buildSession(p: EngineBeginPayload): Promise<{
       // mid-recording; if it is denied or missing the window records alone.
       let camVideo: HTMLVideoElement | null = null;
       try {
-        const camStream = await navigator.mediaDevices.getUserMedia({
+        const camStream = await getUserMediaResilient({
           video: {
             deviceId: opts.cameraId ? { exact: opts.cameraId } : undefined,
             width: { ideal: 1280 },

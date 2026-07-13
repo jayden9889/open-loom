@@ -31,12 +31,14 @@ export async function quickStartRecording(): Promise<void> {
   const first = screens[0];
   if (!first) throw new Error('No screen available to record.');
   await startRecording({
-    mode: settings.recording.defaultMode === 'cam' ? 'screen-cam' : settings.recording.defaultMode,
+    // The hotkey always records the screen with the face bubble on; the
+    // camera is never optional (full-face-only lives in the launcher).
+    mode: 'screen-cam',
     sourceId: first.id,
     sourceIsDisplay: true,
     cameraId: settings.recording.cameraId || undefined,
     micId: settings.recording.micId || undefined,
-    cameraOn: settings.recording.defaultMode !== 'screen',
+    cameraOn: true,
     micOn: true,
     systemAudio: settings.recording.systemAudio,
     quality: settings.recording.quality,

@@ -417,6 +417,8 @@ export interface SearchMatch {
 
 export interface OpenLoomAPI {
   // capture
+  /** Show + focus the floating recording launcher panel (additive; see docs/DECISIONS.md). */
+  openLauncher(): void;
   listCaptureSources(): Promise<CaptureSource[]>;
   listMediaDevices(): Promise<MediaDeviceLists>;
   startRecording(opts: RecordingOptions): Promise<void>;

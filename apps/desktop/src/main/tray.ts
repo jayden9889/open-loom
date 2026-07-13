@@ -6,7 +6,7 @@ import { app, Menu, nativeImage, Tray } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import { log } from './logger';
-import { createMainWindow, broadcast } from './windows';
+import { createMainWindow, broadcast, showLauncher } from './windows';
 import {
   cancelRecording,
   isPaused,
@@ -15,7 +15,6 @@ import {
   resumeRecording,
   stopRecording,
 } from './recorder-ipc';
-import { getSettings } from './settings';
 
 let tray: Tray | null = null;
 
@@ -46,23 +45,7 @@ function rebuildMenu(): void {
     {
       label: 'New recording',
       enabled: !recording,
-      submenu: [
-        {
-          label: 'Screen + Camera',
-          click: () => void startQuick('screen-cam'),
-        },
-        {
-          label: 'Screen only',
-          click: () => void startQuick('screen'),
-        },
-        {
-          label: 'Camera only',
-          click: () => {
-            createMainWindow();
-            broadcast('ol:navigate', { view: 'new-recording', mode: 'cam' });
-          },
-        },
-      ],
+      click: () => showLauncher(),
     },
     { type: 'separator' },
     {
@@ -96,37 +79,6 @@ function rebuildMenu(): void {
     { label: 'Quit Open Loom', click: () => app.quit() },
   ]);
   tray.setContextMenu(menu);
-}
-
-async function startQuick(mode: 'screen-cam' | 'screen'): Promise<void> {
-  const { desktopCapturer } = await import('electron');
-  const settings = getSettings();
-  const screens = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } });
-  const first = screens[0];
-  if (!first) {
-    log.error('tray start: no screen available');
-    return;
-  }
-  const { startRecording } = await import('./recorder-ipc');
-  try {
-    await startRecording({
-      mode,
-      sourceId: first.id,
-      sourceIsDisplay: true,
-      cameraId: settings.recording.cameraId || undefined,
-      micId: settings.recording.micId || undefined,
-      cameraOn: mode === 'screen-cam',
-      micOn: true,
-      systemAudio: settings.recording.systemAudio,
-      quality: settings.recording.quality,
-      fps: settings.recording.fps,
-    });
-  } catch (err) {
-    log.error(`tray start failed: ${String(err)}`);
-    createMainWindow();
-  } finally {
-    rebuildMenu();
-  }
 }
 
 export function installTray(): void {

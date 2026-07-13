@@ -1,8 +1,10 @@
 /**
  * Recording HUD (SPEC R7): frameless vertical control bar. Elapsed timer with
- * red dot, pause/resume, stop, restart, cancel, camera + mic toggles, draw
- * toggle. A hint strip at the bottom names the hovered control and its
- * configured shortcut (the window is too narrow for side tooltips).
+ * red dot, pause/resume, stop, restart, cancel, camera layout switch, mic
+ * toggle, draw toggle. The camera itself is never off - the layout only moves
+ * the face between the corner bubble and full frame. A hint strip at the
+ * bottom names the hovered control and its configured shortcut (the window is
+ * too narrow for side tooltips).
  */
 import { useEffect, useState } from 'react';
 import type { CameraLayout, RecordingState, ShortcutSettings } from '@shared/types';
@@ -62,9 +64,10 @@ const stroke = {
   strokeLinejoin: 'round',
 } as const;
 
-// Signature feature: flip the live camera layout mid-recording. Cycles
-// Screen+Camera -> Camera (full face) -> Screen only (SPEC R6).
-const LAYOUT_ORDER: CameraLayout[] = ['bubble', 'full', 'off'];
+// Signature feature: flip the live camera layout mid-recording. Toggles
+// Screen+Camera (bubble) <-> Camera (full face). The face never leaves the
+// recording, so there is no camera-off state.
+const LAYOUT_ORDER: CameraLayout[] = ['bubble', 'full'];
 const LAYOUT_LABEL: Record<CameraLayout, string> = {
   bubble: 'Screen + Camera',
   full: 'Camera',
@@ -121,9 +124,8 @@ export function Hud() {
   }, []);
 
   const paused = state.status === 'paused';
-  const isCam = state.mode === 'cam';
   const canLayout = state.mode === 'screen-cam';
-  const layout: CameraLayout = state.cameraLayout ?? (state.cameraOn ? 'bubble' : 'off');
+  const layout: CameraLayout = state.cameraLayout ?? 'bubble';
 
   return (
     <div className="hud">
@@ -194,20 +196,6 @@ export function Hud() {
       </HudButton>
 
       <div className="hud-sep" aria-hidden="true" />
-
-      <HudButton
-        label={state.cameraOn ? 'Hide camera' : 'Show camera'}
-        hint={isCam ? 'Camera is the source' : state.mode === 'screen' ? 'Screen-only mode' : state.cameraOn ? 'Hide camera' : 'Show camera'}
-        onHint={setHint}
-        onClick={() => window.openloom.toggleCamera(!state.cameraOn)}
-        active={!!state.cameraOn}
-        disabled={isCam || state.mode === 'screen'}
-      >
-        <svg width="18" height="18" viewBox="0 0 24 24" {...stroke} aria-hidden="true">
-          <rect x="3" y="7" width="12" height="10" rx="2.5" />
-          <path d="m15 10.5 5-2.5v8l-5-2.5" />
-        </svg>
-      </HudButton>
 
       <HudButton
         label={`Layout: ${LAYOUT_LABEL[layout]}`}

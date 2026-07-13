@@ -28,6 +28,7 @@ function subscribe<T>(channel: string): (cb: (payload: T) => void) => () => void
 
 const api: OpenLoomAPI = {
   // capture
+  openLauncher: () => ipcRenderer.send('ol:openLauncher'),
   listCaptureSources: () => ipcRenderer.invoke('ol:listCaptureSources'),
   listMediaDevices: async () => {
     // Devices are enumerated in the renderer (needs a secure context + labels

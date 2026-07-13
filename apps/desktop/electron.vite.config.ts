@@ -37,6 +37,7 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: resolve(__dirname, 'src/renderer/index.html'),
+          launcher: resolve(__dirname, 'src/renderer/launcher.html'),
           hud: resolve(__dirname, 'src/renderer/hud.html'),
           bubble: resolve(__dirname, 'src/renderer/bubble.html'),
           countdown: resolve(__dirname, 'src/renderer/countdown.html'),

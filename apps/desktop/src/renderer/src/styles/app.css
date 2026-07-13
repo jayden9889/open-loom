@@ -1060,6 +1060,61 @@ textarea {
   transition: width 90ms linear;
 }
 
+/* Simple by default: just the Camera/Microphone toggles. */
+.quick-toggles {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* Everything else is tucked behind a native details/summary. */
+.advanced {
+  border-top: 1px solid var(--ol-border);
+  padding-top: 10px;
+}
+
+.advanced > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  color: var(--ol-text-secondary);
+  font-size: var(--ol-text-sm);
+  font-weight: 600;
+  user-select: none;
+}
+
+.advanced > summary::-webkit-details-marker {
+  display: none;
+}
+
+.advanced > summary::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform var(--ol-dur-fast) var(--ol-ease);
+}
+
+.advanced[open] > summary::before {
+  transform: rotate(45deg);
+}
+
+.advanced > summary:hover {
+  color: var(--ol-text);
+}
+
+.advanced-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-top: 12px;
+}
+
 .mic-meter-error {
   font-size: var(--ol-text-sm);
   color: var(--ol-danger);

@@ -26,6 +26,7 @@ import {
   destroyCountdown,
   destroyDrawOverlay,
   destroyHud,
+  destroyLauncher,
   displayForSource,
   getDrawWindow,
   getOrCreateEngineWindow,
@@ -40,6 +41,7 @@ import {
   showCountdown,
   showDrawOverlay,
   showHud,
+  showLauncher,
 } from './windows';
 import { setPendingCapture, clearPendingCapture, displayIdForSource } from './capture';
 import * as ffmpeg from './ffmpeg';
@@ -86,6 +88,7 @@ function elapsedSec(rec: ActiveRecording): number {
 }
 
 function emitState(partial?: Partial<RecordingState>): void {
+  const wasIdle = lastState.status === 'idle';
   if (active) {
     lastState = {
       status: active.status,
@@ -102,6 +105,10 @@ function emitState(partial?: Partial<RecordingState>): void {
     lastState = { status: 'idle', elapsedSec: 0, ...partial };
   }
   broadcast('ol:recording-state', lastState);
+  // The launcher follows the session: it disappears while a recording runs
+  // (destroyed, so its camera preview is released) and returns when idle.
+  if (wasIdle && lastState.status !== 'idle') destroyLauncher();
+  else if (!wasIdle && lastState.status === 'idle') showLauncher({ inactive: true });
 }
 
 export function currentState(): RecordingState {
@@ -164,6 +171,9 @@ export async function startRecording(opts: RecordingOptions): Promise<void> {
   if (opts.mode !== 'cam' && !opts.sourceId) {
     throw new Error('Pick a screen or window to record first.');
   }
+  // The face never leaves a screen recording: camera is always on (proposal
+  // videos are the product; the bubble/full layout switch stays available).
+  if (opts.mode === 'screen-cam') opts = { ...opts, cameraOn: true };
 
   const settings = getSettings();
   const tempId = `rec-${Date.now().toString(36)}-${nanoid(6)}`;
@@ -218,7 +228,10 @@ export async function startRecording(opts: RecordingOptions): Promise<void> {
 
     await beginEngineCapture();
   } catch (err) {
-    await hardResetSession();
+    // Carry the failure on the state broadcast too: the launcher window that
+    // initiated the start is destroyed with the session, so the invoke
+    // rejection alone can land in a dead renderer.
+    await hardResetSession(err instanceof Error ? err.message : String(err));
     throw err instanceof Error ? err : new Error(String(err));
   }
 }
@@ -476,7 +489,7 @@ async function startRecordingWithoutCountdown(opts: RecordingOptions): Promise<v
   await beginEngineCapture();
 }
 
-async function hardResetSession(): Promise<void> {
+async function hardResetSession(error?: string): Promise<void> {
   const rec = active;
   active = null;
   stopTick();
@@ -490,7 +503,7 @@ async function hardResetSession(): Promise<void> {
       log.warn(`temp cleanup failed: ${String(err)}`);
     }
   }
-  emitState({ status: 'idle', elapsedSec: 0 });
+  emitState({ status: 'idle', elapsedSec: 0, ...(error ? { error } : {}) });
 }
 
 // ---------------------------------------------------------------------------

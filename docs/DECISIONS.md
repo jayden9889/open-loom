@@ -3,6 +3,26 @@
 Deviations from SPEC.md and notable build-time decisions land here, newest first.
 Format: date · decision · why.
 
+- 2026-07-13 · Floating recording launcher replaces the in-window New-recording modal, and the
+  camera becomes non-optional (supersedes the SPEC R1 mode picker; additive IPC only). Open Loom
+  is used to record proposal walkthrough videos, so the face is the product: (1) A slim
+  always-on-top launcher window (`launcher.html`, `showLauncher` in windows.ts) pinned to the left
+  edge of the primary display opens on app launch (once setup is complete), on tray "New
+  recording", on the sidebar Record button and after Setup finishes. It carries a live camera
+  preview, mic toggle + level meter, compact device pickers, a source grid in Screen mode, and a
+  single bottom switch: Full face (`cam`) | Screen (`screen-cam`). It is capture-excluded, is
+  destroyed while a recording runs (releasing its preview camera) and returns when the session
+  goes idle - both driven from the `emitState` transition funnel in recorder-ipc.ts. (2) The
+  'screen' (no-camera) mode is no longer offered anywhere: the launcher has two modes,
+  `startRecording` forces `cameraOn: true` for `screen-cam`, the HUD camera on/off button is gone
+  and the HUD layout switch cycles bubble <-> full only ('off' stays in the CameraLayout type for
+  the IPC surface and legacy manifests; `RecordingMode` keeps 'screen' so old library metadata
+  still parses). (3) `OpenLoomAPI` gains `openLauncher(): void`. (4) Start-time capture failures
+  are now also broadcast on the recording-state channel (`hardResetSession(error)`) because the
+  launcher window that initiated the start dies with the session, so an IPC rejection alone could
+  land in a destroyed renderer. (5) The global start hotkey always records `screen-cam` with the
+  camera on. NewRecording.tsx (the modal) is deleted; the e2e suite drives the launcher window.
+
 - 2026-07-08 · Publish to YouTube (unlisted) helper (SPEC S7; additive to sections 4 + 5, no
   breaking changes). A guided MANUAL publish on the Watch view - not a share provider and not an
   API integration - because uploads through an unaudited YouTube API project are force-locked to

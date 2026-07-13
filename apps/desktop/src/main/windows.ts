@@ -127,6 +127,77 @@ export function getMainWindow(): BrowserWindow | null {
 }
 
 // ---------------------------------------------------------------------------
+// Floating recording launcher (left edge of the screen)
+// ---------------------------------------------------------------------------
+
+let launcherWindow: BrowserWindow | null = null;
+
+export const LAUNCHER_SIZE = { width: 316, height: 640 };
+
+/**
+ * Slim always-on-top panel pinned to the left edge of the primary display:
+ * camera preview, mic, source picker and the Full face / Screen switch. Shown
+ * on launch and whenever no recording is running; excluded from capture so it
+ * never appears in a recording.
+ */
+export function showLauncher(opts?: { inactive?: boolean }): BrowserWindow {
+  if (launcherWindow && !launcherWindow.isDestroyed()) {
+    if (opts?.inactive) launcherWindow.showInactive();
+    else {
+      launcherWindow.show();
+      launcherWindow.focus();
+    }
+    return launcherWindow;
+  }
+  const { workArea } = screen.getPrimaryDisplay();
+  const height = Math.min(LAUNCHER_SIZE.height, workArea.height - 32);
+  launcherWindow = new BrowserWindow({
+    x: workArea.x + 16,
+    y: workArea.y + Math.round((workArea.height - height) / 2),
+    width: LAUNCHER_SIZE.width,
+    height,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    hasShadow: false,
+    show: false,
+    title: 'Open Loom Recorder',
+    webPreferences: { ...basePrefs },
+  });
+  applyNavigationGuards(launcherWindow);
+  launcherWindow.setAlwaysOnTop(true, 'floating');
+  try {
+    launcherWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  } catch (err) {
+    log.warn(`launcher setVisibleOnAllWorkspaces failed: ${String(err)}`);
+  }
+  excludeFromCapture(launcherWindow);
+  launcherWindow.once('ready-to-show', () => {
+    if (opts?.inactive) launcherWindow?.showInactive();
+    else launcherWindow?.show();
+  });
+  loadPage(launcherWindow, 'launcher');
+  launcherWindow.on('closed', () => {
+    launcherWindow = null;
+  });
+  return launcherWindow;
+}
+
+/** Destroy (not hide) so the camera preview stream dies with the renderer. */
+export function destroyLauncher(): void {
+  if (launcherWindow && !launcherWindow.isDestroyed()) launcherWindow.destroy();
+  launcherWindow = null;
+}
+
+export function getLauncherWindow(): BrowserWindow | null {
+  return launcherWindow && !launcherWindow.isDestroyed() ? launcherWindow : null;
+}
+
+// ---------------------------------------------------------------------------
 // Overlay + engine windows (recording session)
 // ---------------------------------------------------------------------------
 
