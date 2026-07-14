@@ -461,7 +461,6 @@ export interface OpenLoomAPI {
   clearDraw(): void;
   setBubbleSize(s: BubbleSize): void;
   /** Switch the live camera layout mid-recording (Screen+Camera only). */
-  setLayout(layout: CameraLayout): void;
 
   // library
   listVideos(): Promise<VideoMeta[]>;

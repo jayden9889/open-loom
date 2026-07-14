@@ -52,7 +52,6 @@ const api: OpenLoomAPI = {
   setDrawColor: (color: string) => ipcRenderer.send('ol:setDrawColor', color),
   clearDraw: () => ipcRenderer.send('ol:clearDraw'),
   setBubbleSize: (s: BubbleSize) => ipcRenderer.send('ol:setBubbleSize', s),
-  setLayout: (layout: CameraLayout) => ipcRenderer.send('ol:setLayout', layout),
 
   // library
   listVideos: () => ipcRenderer.invoke('ol:listVideos'),

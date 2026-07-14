@@ -31,9 +31,7 @@ import {
   getDrawWindow,
   getOrCreateEngineWindow,
   positionBubbleCircle,
-  raiseHud,
   resizeBubbleKeepAnchor,
-  setBubbleFullScreen,
   setBubbleLayout,
   sendDrawClear,
   sendDrawColor,
@@ -521,18 +519,11 @@ export function toggleCamera(on: boolean): void {
   applyLayout(rec, on ? rec.lastCamLayout : 'off');
 }
 
-/** Switch the live camera layout mid-recording (Screen+Camera recordings only). */
-export function setLayout(layout: CameraLayout): void {
-  const rec = active;
-  if (!rec) return;
-  applyLayout(rec, layout);
-}
-
 /**
- * Apply a camera layout across both capture paths:
- * - Window-composite: the engine canvas compositor redraws (bubble/full/off).
- * - Full-display: the bubble is a real OS window the display capture sees, so
- *   we resize it (circle bottom-left / full-screen cover / hidden).
+ * Apply a camera layout across both capture paths (bubble/off - the full-
+ * frame "circle enlarger" layout was cut 2026-07-14, no UI reaches it):
+ * - Window-composite: the engine canvas compositor redraws.
+ * - Full-display: the bubble is a real OS window the display capture sees.
  */
 function applyLayout(rec: ActiveRecording, layout: CameraLayout): void {
   // Only Screen+Camera recordings have a switchable camera. Screen-only has no
@@ -561,14 +552,7 @@ function applyFullDisplayBubble(rec: ActiveRecording, layout: CameraLayout): voi
   }
   const size = getSettings().bubble.size;
   showBubble(rec.display, size);
-  if (layout === 'full') {
-    setBubbleFullScreen(rec.display);
-    // Keep the (capture-excluded) HUD above the full-frame camera so the user
-    // can always switch back.
-    raiseHud();
-  } else {
-    positionBubbleCircle(rec.display, size);
-  }
+  positionBubbleCircle(rec.display, size);
   setBubbleLayout(layout);
 }
 

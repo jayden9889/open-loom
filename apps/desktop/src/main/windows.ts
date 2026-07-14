@@ -332,13 +332,6 @@ export function setBubbleVisible(visible: boolean): void {
  * records the camera full-frame (the 'full' camera layout, SPEC R6). The
  * renderer switches to a rectangular opaque cover-fit via setBubbleLayout.
  */
-export function setBubbleFullScreen(display: Display): void {
-  if (!bubbleWindow || bubbleWindow.isDestroyed()) return;
-  const { bounds } = display;
-  bubbleWindow.setBounds({ x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height });
-  bubbleWindow.showInactive();
-}
-
 /** Restore the bubble window to its circular size, anchored bottom-left of the display. */
 export function positionBubbleCircle(display: Display, size: BubbleSize): void {
   if (!bubbleWindow || bubbleWindow.isDestroyed()) return;
@@ -358,11 +351,6 @@ export function setBubbleLayout(layout: CameraLayout): void {
   const wc = bubbleWindow.webContents;
   if (wc.isLoading()) wc.once('did-finish-load', () => wc.send('bubble:set-layout', layout));
   else wc.send('bubble:set-layout', layout);
-}
-
-/** Raise the HUD above the (capture-excluded) full camera so its controls stay reachable. */
-export function raiseHud(): void {
-  if (hudWindow && !hudWindow.isDestroyed()) hudWindow.moveTop();
 }
 
 export function destroyBubble(): void {
