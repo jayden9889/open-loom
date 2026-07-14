@@ -179,6 +179,30 @@ export type TranscriptionEngine = 'whisper' | 'openai' | 'off';
 export type AiProvider = 'anthropic' | 'openai' | 'ollama' | 'off';
 export type ShareProviderKind = 'server' | 's3' | 'none';
 
+// ---------------------------------------------------------------------------
+// Camera effects (Settings > FaceCam)
+//
+// Portrait (background blur), Studio Light and friends are macOS SYSTEM
+// video effects: the OS applies them on the Neural Engine inside the camera
+// pipeline, before frames ever reach an app, so they land in previews, the
+// bubble and recordings automatically and cost the app nothing. They are
+// user-controlled (Control Center > Video Effects); an app can only read
+// their state and open that panel. This is deliberate - two hand-rolled
+// in-app pipelines (segmentation relighting, then segmentation blur) were
+// built and killed for quality; the OS matting is the gold standard.
+// ---------------------------------------------------------------------------
+
+export interface CameraEffectsStatus {
+  /** OS-level camera effects exist on this machine (macOS + supported camera). */
+  supported: boolean;
+  /** Portrait (background blur) currently on. */
+  portrait: boolean;
+  /** Studio Light currently on. */
+  studioLight: boolean;
+  /** Reactions (gesture effects) currently on. */
+  reactions: boolean;
+}
+
 export interface Settings {
   setupComplete: boolean;
   /** Absolute path of the library save folder. */
@@ -431,6 +455,10 @@ export interface OpenLoomAPI {
   toggleCamera(on: boolean): void;
   toggleMic(on: boolean): void;
   toggleDraw(on: boolean): void;
+  /** Pen colour for the draw overlay ('red' | 'violet' | 'yellow'). */
+  setDrawColor(color: string): void;
+  /** Instantly wipe every stroke on the draw overlay. */
+  clearDraw(): void;
   setBubbleSize(s: BubbleSize): void;
   /** Switch the live camera layout mid-recording (Screen+Camera only). */
   setLayout(layout: CameraLayout): void;
@@ -476,6 +504,8 @@ export interface OpenLoomAPI {
   youtubePublishStart(videoId: string): Promise<{ titleCopied: boolean }>;
   /** Validate + persist a pasted YouTube link; rejects non-YouTube input. */
   youtubeSaveLink(videoId: string, url: string): Promise<VideoMeta>;
+  /** Canonical YouTube watch URL from the clipboard, or null (prefills the paste-back field). */
+  youtubeReadClipboardLink(): Promise<string | null>;
 
   // settings & system
   getSettings(): Promise<Settings>;
@@ -485,6 +515,10 @@ export interface OpenLoomAPI {
   getPermissions(): Promise<PermissionsSnapshot>;
   requestPermission(kind: string): Promise<void>;
   openSystemSettings(pane: string): void;
+  /** State of the macOS system camera effects (Portrait / Studio Light). */
+  cameraEffects(): Promise<CameraEffectsStatus>;
+  /** Open the system Video Effects panel (the Control Center camera controls). */
+  openCameraEffects(): void;
   installWhisper(): Promise<void>;
   onSetupLog(cb: (line: string) => void): () => void;
   fetchFfmpeg(): Promise<void>;
@@ -548,4 +582,6 @@ export interface OpenLoomInternal {
   // draw window
   onDrawEnable(cb: (on: boolean) => void): () => void;
   onDrawRipple(cb: (p: { x: number; y: number }) => void): () => void;
+  onDrawColor(cb: (color: string) => void): () => void;
+  onDrawClear(cb: () => void): () => void;
 }

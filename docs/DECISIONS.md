@@ -3,6 +3,53 @@
 Deviations from SPEC.md and notable build-time decisions land here, newest first.
 Format: date · decision · why.
 
+- 2026-07-14 · FaceCam = macOS system camera effects; both hand-rolled pipelines killed. Two
+  in-app implementations were built and discarded the same day after real-camera tests: (1)
+  person-segmentation RELIGHTING (scene modes + adaptive gains) - the 256px selfie mask is too
+  coarse for per-pixel relighting, glitchy hair edges; (2) segmentation BACKGROUND BLUR
+  (multiclass hair-aware model, EMA smoothing, person-removed background, feathered compositing) -
+  better, still visibly a filter around hair and it taxed the fps. The verdict: Apple already
+  ships the gold standard. Portrait (blur), Studio Light and Reactions are applied by macOS on
+  the Neural Engine INSIDE the camera pipeline, before frames reach any app, so previews, the
+  bubble and recordings inherit them automatically at zero app cost - and no in-app pipeline can
+  compete with the OS matting. They are strictly user-controlled (verified against Apple docs:
+  the AVCaptureDevice class properties are read-only; the ONLY app lever is
+  showSystemUserInterface(.videoEffects), macOS 12+). Integration: a tiny in-repo node-addon-api
+  addon (`apps/desktop/native/camera-effects`, Objective-C++, darwin-only via "os" gate,
+  optionalDependency + asarUnpack + vite external - the exact uiohook-napi pattern) exposes
+  status() {supported, portrait (12+), studioLight (13+), reactions (14+)} and
+  showVideoEffectsPanel(); main wraps it in camera-effects.ts with graceful degradation (no
+  addon = "unsupported" label; the effects still work via Control Center). Settings > FaceCam is
+  now a live preview + on/off status pills (polled while the pane is open) + an "Open Camera
+  Effects" button. FacecamSettings/facecamEffect/facecamCssLayers, studio/blur.ts, the MediaPipe
+  dep + model/wasm scripts and the openloom-asset:// scheme + CSP additions are all removed.
+  Hardware notes: built-in camera effects need Apple Silicon; Continuity Camera unlocks them on
+  any Mac (iPhone XR+ for Portrait, 12+ for Studio Light); external USB webcams get none.
+
+- 2026-07-14 · Draw ink lifecycle reworked (supersedes SPEC R10 "strokes fade after 3s"). The pen
+  exists to annotate while talking over content, so a timed fade erased ink mid-explanation:
+  (1) Ink never fades while draw mode is on. (2) Leaving draw mode (HUD Done button, Draw toggle,
+  Esc or the shortcut) is the exit signal - the ink melts out (600ms) right then and the mouse
+  returns to the page. (A scroll-triggered melt via a global wheel hook was built first and
+  simplified away: exit-to-fade is the intent, one signal, no accessibility permission needed.)
+  (3) The HUD is raised ABOVE the interactive draw surface (`raiseHud()` in
+  `setDrawInteractive`) - without this the overlay eats every click and the presenter is trapped
+  in draw mode: no colour switch, no clear, no Done, no Stop. Cursor is the pen over the page and
+  a normal pointer over the HUD. HUD draw toolbar: three pens, clear, and a green "Done drawing"
+  button (HUD_DRAW_EXTRA 116 -> 155).
+
+- 2026-07-13 · YouTube publish flow tightened (additive; the guided MANUAL flow from 2026-07-08 is
+  unchanged in nature - still no API upload). Proposal videos need the link fast, so: (1) The Watch
+  view auto-expands the "Publish to YouTube" panel when it opens straight off a finished recording
+  (new optional `fresh` flag on the watch view state / `freshRecording` prop; recordings opened
+  later from the Library behave as before). (2) The panel gains an "Open YouTube upload" primary
+  button so the reveal-MP4 + open-browser + copy-AI-title step no longer lives only in the header.
+  (3) New IPC `youtubeReadClipboardLink(): string | null` (thin wrapper over the unit-tested
+  `parseYouTubeUrl` + `clipboard.readText`): while the panel is open and no link is saved, a window
+  focus event prefills the paste-back field from the clipboard, so browser -> cmd-tab -> Save is
+  the whole return trip. It never overwrites a non-empty draft and parses strictly, so arbitrary
+  clipboard text is ignored.
+
 - 2026-07-13 · Floating recording launcher replaces the in-window New-recording modal, and the
   camera becomes non-optional (supersedes the SPEC R1 mode picker; additive IPC only). Open Loom
   is used to record proposal walkthrough videos, so the face is the product: (1) A slim

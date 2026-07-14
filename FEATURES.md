@@ -19,7 +19,7 @@ noted where one exists.
 | Hide/show camera mid-recording | Free | ✅ v1 |
 | Switch face/screen layout mid-recording | Business+ | ✅ v1 (free — flip Screen+Camera / Camera full face / Screen only, live, both capture paths) |
 | Flip / mirror camera | Free | ✅ v1 |
-| Virtual backgrounds / blur | Free | 🔜 roadmap (MediaPipe segmentation) |
+| Virtual backgrounds / blur | Free | ✅ via macOS camera effects (see Portrait row below; Background Replacement on macOS 15+) |
 | Avatar mode | Paid | 🔜 roadmap |
 | Mic + camera device pickers | Free | ✅ v1 |
 | System (computer) audio | Free | ✅ v1 (macOS 14.2+, native loopback — no virtual driver) |
@@ -28,8 +28,9 @@ noted where one exists.
 | Pause / resume | Free | ✅ v1 |
 | Restart / cancel recording | Free | ✅ v1 |
 | Recording control bar (timer, controls) | Free | ✅ v1 |
-| Drawing tool while recording | Business+ | ✅ v1 (free — full-screen mode) |
+| Drawing tool while recording | Business+ | ✅ v1 (free — full-screen mode; ink holds while you talk, melts when you tap Done) |
 | Click/mouse highlight | Business+ | ✅ v1 (free, optional accessibility permission) |
+| Background blur (Portrait) + Studio Light | — | ✅ via macOS camera effects (Neural Engine matting inside the camera pipeline - the FaceCam pane shows live status and opens the system panel; Apple Silicon or Continuity Camera) |
 | Confetti | Free | 🔜 roadmap |
 | Global keyboard shortcuts (customisable) | Free | ✅ v1 |
 | Menubar / tray quick-start | Free | ✅ v1 |

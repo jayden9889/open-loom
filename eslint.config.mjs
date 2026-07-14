@@ -11,6 +11,8 @@ export default tseslint.config(
       'test-assets/**',
       'playwright-report/**',
       'test-results/**',
+      // CommonJS shim of the darwin-only native addon (bindings require).
+      'apps/desktop/native/**',
     ],
   },
   ...tseslint.configs.recommended,

@@ -23,7 +23,7 @@ import { SettingsView } from './views/Settings';
 
 export type View =
   | { name: 'library'; folderId: string | null }
-  | { name: 'watch'; id: string }
+  | { name: 'watch'; id: string; fresh?: boolean }
   | { name: 'editor'; id: string }
   | { name: 'settings'; pane?: string }
   | { name: 'setup' };
@@ -86,7 +86,7 @@ function AppInner() {
       setRecState((prev) => {
         if (s.error && s.error !== prev.error) push('error', s.error);
         if (s.lastVideoId && s.lastVideoId !== prev.lastVideoId) {
-          void reloadLibrary().then(() => setView({ name: 'watch', id: s.lastVideoId! }));
+          void reloadLibrary().then(() => setView({ name: 'watch', id: s.lastVideoId!, fresh: true }));
         }
         return s;
       });
@@ -317,6 +317,7 @@ function AppInner() {
         {view.name === 'watch' && (
           <WatchView
             id={view.id}
+            freshRecording={view.fresh ?? false}
             folders={folders}
             settings={settings}
             onBack={() => setView({ name: 'library', folderId: null })}

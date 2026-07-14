@@ -41,6 +41,10 @@ function record(name: string, ok: boolean, classification: Classification, detai
   console.log(`[CHECK] ${ok ? 'PASS' : 'FAIL'} (${classification}) ${name}${detail ? ' :: ' + detail : ''}`);
 }
 const shots: string[] = [];
+// Full app-side console (main-process log lines + renderer console via
+// ELECTRON_ENABLE_LOGGING) - written into the report so a failed run carries
+// its own evidence instead of needing a rerun.
+const appLog: string[] = [];
 async function shot(page: Page, file: string): Promise<void> {
   const p = path.join(SCREENS, file);
   try {
@@ -143,6 +147,24 @@ async function windowByUrl(app: ElectronApplication, frag: string, timeoutMs = 1
 test('Open Loom full E2E (SPEC §7)', async () => {
   test.setTimeout(360_000);
   fs.mkdirSync(SCREENS, { recursive: true });
+  // A live `electron-vite dev` instance shares apps/desktop/out with this
+  // suite: a dev rebuild mid-run swaps the chunk files the e2e app lazy-loads,
+  // and its windows die one by one ("Target page ... has been closed").
+  // Refuse to run rather than fail mysteriously.
+  try {
+    execFileSync('pgrep', ['-f', 'electron-vite dev'], { encoding: 'utf8' });
+    record(
+      'no dev instance running',
+      false,
+      'environment',
+      'electron-vite dev is running and shares apps/desktop/out with this suite. Stop it (pkill -f "electron-vite dev") and rerun.'
+    );
+    fs.writeFileSync(REPORT, JSON.stringify({ checks, shots, appLog }, null, 2));
+    throw new Error('dev instance running - e2e refused to start');
+  } catch (err) {
+    if (err instanceof Error && err.message.includes('refused')) throw err;
+    /* pgrep exits non-zero when nothing matches: clean environment */
+  }
   if (!fs.existsSync(MAIN_ENTRY)) {
     record('build present', false, 'test-bug', `missing ${MAIN_ENTRY}; run npm run build`);
     fs.writeFileSync(REPORT, JSON.stringify({ checks, shots }, null, 2));
@@ -179,6 +201,15 @@ test('Open Loom full E2E (SPEC §7)', async () => {
       ],
       env: { ...process.env, OPENLOOM_USER_DATA: userData, ELECTRON_ENABLE_LOGGING: '1' },
     });
+    a.process().stdout?.on('data', (d: Buffer) => appLog.push(...d.toString().split('\n').filter(Boolean)));
+    a.process().stderr?.on('data', (d: Buffer) => appLog.push(...d.toString().split('\n').filter(Boolean)));
+    // Every window that ever appears logs its close, stamped against the checks.
+    const tagWindow = (w: Page) => {
+      const url = w.url();
+      w.on('close', () => appLog.push(`[e2e] WINDOW CLOSED: ${url} (after ${checks.length} checks)`));
+    };
+    a.windows().forEach(tagWindow);
+    a.on('window', tagWindow);
     const p = await windowByUrl(a, 'index.html');
     return { app: a, page: p };
   };
@@ -270,9 +301,48 @@ test('Open Loom full E2E (SPEC §7)', async () => {
       // is torn down by the main process once recording begins, so all state
       // polling happens in the main window.
       const startBtn = launcher.getByRole('button', { name: /Start recording/i });
-      const recAttempt = await attemptRealRecording(app, page, startBtn);
-      record(recAttempt.name, recAttempt.ok, recAttempt.classification, recAttempt.detail);
+      const recChecks = await attemptRealRecording(app, page, startBtn);
+      for (const c of recChecks) record(c.name, c.ok, c.classification, c.detail);
+      const recLanded = recChecks[0]?.ok ?? false;
       await shot(page, '06-recording-attempt.png');
+      // A recording that just landed auto-opens Watch with the YouTube publish
+      // panel already expanded (fresh-recording flow, DECISIONS 2026-07-13).
+      if (recLanded) {
+        const ytPanel = await page
+          .waitForSelector('.youtube-block', { timeout: 10_000 })
+          .then(() => true)
+          .catch(() => false);
+        record(
+          'fresh recording lands on Watch with the publish panel expanded',
+          ytPanel,
+          ytPanel ? 'pass' : 'product-bug',
+          `youtube-block visible=${ytPanel}`
+        );
+        await shot(page, '06b-watch-publish-panel.png');
+        // The paste-back half of the guided YouTube publish, end to end:
+        // saving a messy-but-valid link must persist the canonical watch URL
+        // and auto-copy it (what actually gets sent to a prospect).
+        const recVideoId = recChecks[0]?.detail.match(/videoId=([\w-]+)/)?.[1];
+        if (recVideoId) {
+          try {
+            const res = await page.evaluate(async (vid) => {
+              const meta = await window.openloom.youtubeSaveLink(vid, 'https://youtu.be/dQw4w9WgXcQ?si=tracking&t=12');
+              const clip = await window.openloom.youtubeReadClipboardLink();
+              return { saved: meta.youtubeUrl ?? '', clip };
+            }, recVideoId);
+            const canonical = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ';
+            const ok = res.saved === canonical && res.clip === canonical;
+            record(
+              'guided YouTube publish persists + copies the canonical link',
+              ok,
+              ok ? 'pass' : 'product-bug',
+              `saved=${res.saved} clipboard=${res.clip}`
+            );
+          } catch (err) {
+            record('guided YouTube publish persists + copies the canonical link', false, 'product-bug', String(err));
+          }
+        }
+      }
       // Ensure nothing is left recording before we continue.
       await page.evaluate(async () => {
         try {
@@ -628,7 +698,7 @@ test('Open Loom full E2E (SPEC §7)', async () => {
       unexpected404.length ? `unexpected: ${unexpected404.slice(0, 5).map((u) => u.replace(/^openloom-file:\/\//, '')).join(', ')}` : `only expected caption probes (${expected404.length})`
     );
   } finally {
-    fs.writeFileSync(REPORT, JSON.stringify({ checks, shots }, null, 2));
+    fs.writeFileSync(REPORT, JSON.stringify({ checks, shots, appLog }, null, 2));
     if (app) await app.close().catch(() => undefined);
     if (server) await server.stop().catch(() => undefined);
     try {
@@ -642,22 +712,23 @@ test('Open Loom full E2E (SPEC §7)', async () => {
   }
 });
 
-// Attempt a real screen-only recording and return a classified check. Never
-// throws; classifies TCC / capture failures as environment.
+// Attempt a real screen-only recording and return classified checks (the
+// recording itself first, then the mid-recording bubble check). Never throws;
+// classifies TCC / capture failures as environment.
 async function attemptRealRecording(
   app: ElectronApplication,
   page: Page,
   startBtn: ReturnType<Page['getByRole']>
-): Promise<Check> {
+): Promise<Check[]> {
   const name = 'real screen recording via the UI (camera always on, TCC-tolerant)';
   const perms = await page.evaluate(() => window.openloom.getPermissions());
   if (process.platform === 'darwin' && perms.screen !== 'granted') {
-    return {
+    return [{
       name,
       ok: false,
       classification: 'environment',
       detail: `macOS Screen Recording not granted to the Electron dev binary (screen='${perms.screen}'). Grant it in System Settings > Privacy & Security > Screen Recording to record for real.`,
-    };
+    }];
   }
   try {
     if (await startBtn.count()) await startBtn.click();
@@ -669,7 +740,7 @@ async function attemptRealRecording(
       const st = await page.evaluate(() => window.openloomInternal.getRecordingState());
       lastState = st.status;
       if (st.error) {
-        return { name, ok: false, classification: 'environment', detail: `capture error: ${st.error}` };
+        return [{ name, ok: false, classification: 'environment', detail: `capture error: ${st.error}` }];
       }
       if (st.status === 'recording') {
         reached = true;
@@ -678,14 +749,58 @@ async function attemptRealRecording(
       await page.waitForTimeout(400);
     }
     if (!reached) {
-      return { name, ok: false, classification: 'environment', detail: `recording never reached 'recording' (last='${lastState}') - likely no capturable display / TCC` };
+      return [{ name, ok: false, classification: 'environment', detail: `recording never reached 'recording' (last='${lastState}') - likely no capturable display / TCC` }];
     }
     // Record ~4s then stop via the real stop path.
-    await page.waitForTimeout(4000);
+    await page.waitForTimeout(2000);
+    // Mid-recording: the webcam bubble must show live camera video, never the
+    // opaque "Camera is off" overlay (an author display:flex on .bubble-off
+    // once beat the [hidden] attribute and blacked out the face in every
+    // full-display recording).
+    let bubbleOk = false;
+    let bubbleDetail = '';
+    try {
+      const bubble = await windowByUrl(app, 'bubble.html', 5000);
+      // The video fades in only after loadeddata; poll briefly for the live state.
+      const st = await bubble.evaluate(async () => {
+        const deadline = Date.now() + 5000;
+        const read = () => {
+          const b = document.getElementById('bubble');
+          const state = document.getElementById('bubble-state');
+          const video = document.getElementById('bubble-video') as HTMLVideoElement | null;
+          return {
+            live: !!b?.classList.contains('live'),
+            stateShown: !!state && getComputedStyle(state).display !== 'none',
+            videoWidth: video?.videoWidth ?? 0,
+            videoOpacity: video ? Number(getComputedStyle(video).opacity) : 0,
+          };
+        };
+        let cur = read();
+        while (Date.now() < deadline && !(cur.live && cur.videoOpacity > 0.9)) {
+          await new Promise((r) => setTimeout(r, 200));
+          cur = read();
+        }
+        return cur;
+      });
+      bubbleOk = st.live && !st.stateShown && st.videoWidth > 0 && st.videoOpacity > 0.9;
+      bubbleDetail = `live=${st.live} stateShown=${st.stateShown} videoWidth=${st.videoWidth} opacity=${st.videoOpacity}`;
+    } catch (err) {
+      bubbleDetail = `bubble window: ${String(err)}`;
+    }
+    const bubbleCheck: Check = {
+      name: 'webcam bubble shows live camera while recording (no off-overlay)',
+      ok: bubbleOk,
+      classification: bubbleOk ? 'pass' : 'product-bug',
+      detail: bubbleDetail,
+    };
+    await page.waitForTimeout(2000);
     const out = await page.evaluate(() => window.openloom.stopRecording());
-    return { name, ok: !!out.videoId, classification: out.videoId ? 'pass' : 'product-bug', detail: `videoId=${out.videoId}` };
+    return [
+      { name, ok: !!out.videoId, classification: out.videoId ? 'pass' : 'product-bug', detail: `videoId=${out.videoId}` },
+      bubbleCheck,
+    ];
   } catch (err) {
-    return { name, ok: false, classification: 'environment', detail: `start/stop failed: ${String(err)}` };
+    return [{ name, ok: false, classification: 'environment', detail: `start/stop failed: ${String(err)}` }];
   }
 }
 

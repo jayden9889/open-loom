@@ -10,14 +10,17 @@ body.launcher-body {
 
 .launcher {
   height: 100vh;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   gap: 10px;
   padding: 0 14px 14px;
-  background: var(--ol-bg);
-  border: 1px solid var(--ol-border);
+  /* Faux glass (DESIGN.md overlay recipe): a floating window has no page
+     content behind it to backdrop-blur, so the material is layered fills. */
+  background: linear-gradient(155deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.02) 42%),
+    rgba(20, 20, 25, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.22);
   border-radius: var(--ol-radius-card);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.28);
   overflow: hidden;
 }
 
@@ -42,16 +45,52 @@ body.launcher-body {
 }
 
 .launcher-preview {
+  position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
-  object-fit: cover;
   border-radius: var(--ol-radius-control);
-  background: #000;
+  background: linear-gradient(155deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.01) 40%),
+    #0f0f13;
   flex-shrink: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.launcher-preview.mirrored {
+/* The raw video surface stays invisible until it has decodable frames
+   (Chromium paints green garbage before then), then fades in. */
+.launcher-preview video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity var(--ol-dur) var(--ol-ease);
+}
+
+.launcher-preview video.ready {
+  opacity: 1;
+}
+
+.launcher-preview video.mirrored {
   transform: scaleX(-1);
+}
+
+.preview-ring {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.14);
+  border-top-color: var(--ol-accent);
+  animation: preview-spin 0.9s linear infinite;
+}
+
+@keyframes preview-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .launcher-preview-error {
@@ -92,12 +131,54 @@ body.launcher-body {
   gap: 6px;
   min-height: 0;
   flex: 1;
+  /* The column is height-constrained; without this the source cards paint
+     straight through the footer when they do not fit. */
+  overflow: hidden;
+}
+
+/* One scroll region for the whole "What to record" body (display card,
+   group label and window grid together) - never nested scrollbars. */
+.launcher-sources-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
 }
 
 .launcher-sources .source-grid {
   grid-template-columns: 1fr 1fr;
-  overflow-y: auto;
-  min-height: 0;
+  max-height: none;
+  overflow-y: visible;
+  flex-shrink: 0;
+}
+
+/* Full screen: the primary choice - one wide card ahead of the window grid. */
+.launcher-sources .source-grid-displays {
+  grid-template-columns: 1fr;
+}
+
+/* Compact wide crop instead of the app grid's 16/10 thumb: keeps the card
+   prominent without eating the window list's scroll space. */
+.launcher-sources .source-card-display img,
+.launcher-sources .source-card-display .source-thumb-empty {
+  aspect-ratio: auto;
+  height: 64px;
+}
+
+.source-card-display .source-name {
+  font-size: var(--ol-text-sm);
+  font-weight: 600;
+}
+
+.source-sub {
+  font-weight: 400;
+  color: var(--ol-text-tertiary);
+}
+
+.source-group-label {
+  margin-top: 2px;
 }
 
 .launcher-note {

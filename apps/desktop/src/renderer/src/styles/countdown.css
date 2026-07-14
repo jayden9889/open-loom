@@ -25,35 +25,181 @@ body {
   background: rgba(0, 0, 0, 0.35);
 }
 
-.countdown-number {
+/* Faux glass disc: transparent overlay window, so depth comes from layered
+   fills and inset lines, never backdrop-filter. Light source is top-left
+   (155deg) across fill, rim and highlight - keep the angle consistent. */
+.countdown-disc {
+  position: relative;
   width: 168px;
   height: 168px;
   border-radius: 50%;
-  background: var(--ol-accent);
-  color: #ffffff;
-  font-size: 96px;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  line-height: 1;
+  isolation: isolate;
+  background:
+    linear-gradient(
+      155deg,
+      rgba(255, 255, 255, 0.14) 0%,
+      rgba(255, 255, 255, 0.04) 42%,
+      rgba(255, 255, 255, 0.02) 100%
+    ),
+    rgba(20, 20, 25, 0.88);
+  box-shadow:
+    0 1px 1px rgba(0, 0, 0, 0.35),
+    0 12px 32px -12px rgba(0, 0, 0, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.3);
+  animation: countdown-enter var(--ol-dur) var(--ol-ease) both;
 }
 
-.countdown-number.pop {
-  animation: countdown-pop 340ms var(--ol-ease);
+/* 1px gradient rim, bright top-left fading out: mask-composite keeps only
+   the ring, so it reads over any background. */
+.countdown-disc::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  pointer-events: none;
+  background: linear-gradient(
+    155deg,
+    rgba(255, 255, 255, 0.4) 0%,
+    rgba(255, 255, 255, 0.12) 45%,
+    rgba(255, 255, 255, 0.05) 100%
+  );
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask-composite: exclude;
 }
 
-@keyframes countdown-pop {
-  0% {
-    transform: scale(1.18);
+/* Fine grain at ~3.5% kills gradient banding on the glass face. */
+.countdown-disc::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0.035;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.countdown-ring {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+  pointer-events: none;
+}
+
+.countdown-ring-track {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.14);
+  stroke-width: 2;
+}
+
+.countdown-ring-arc {
+  fill: none;
+  stroke: var(--ol-accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-dasharray: 502.66; /* 2 x pi x r80 - must match the circle radius in countdown.ts */
+  stroke-dashoffset: 0;
+}
+
+.countdown-ring-arc.is-filling {
+  animation: countdown-ring-fill 1000ms linear both;
+}
+
+@keyframes countdown-ring-fill {
+  from {
+    stroke-dashoffset: 502.66;
   }
-  100% {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.countdown-digits {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+
+.countdown-digit {
+  grid-area: 1 / 1;
+  color: #f5f5f7;
+  font-size: 88px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  will-change: transform, opacity;
+}
+
+.countdown-digit.is-in {
+  animation: countdown-digit-in 300ms var(--ol-ease) both;
+}
+
+.countdown-digit.is-out {
+  animation: countdown-digit-out 220ms var(--ol-ease) both;
+}
+
+@keyframes countdown-digit-in {
+  from {
+    opacity: 0;
+    transform: scale(1.3);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes countdown-digit-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.82);
+  }
+}
+
+@keyframes countdown-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
     transform: scale(1);
   }
 }
 
 .countdown-hint {
-  color: rgba(255, 255, 255, 0.92);
-  font-size: 15px;
+  color: rgba(245, 245, 247, 0.9);
+  font-size: 14px;
   font-weight: 500;
+  letter-spacing: 0.1px;
+  animation: countdown-enter var(--ol-dur) var(--ol-ease) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .countdown-disc,
+  .countdown-hint,
+  .countdown-digit.is-in,
+  .countdown-ring-arc.is-filling {
+    animation: none;
+  }
+
+  /* Exit animation is off, so hide outgoing digits until their timed removal. */
+  .countdown-digit.is-out {
+    display: none;
+  }
 }

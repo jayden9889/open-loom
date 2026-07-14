@@ -49,6 +49,8 @@ const api: OpenLoomAPI = {
   toggleCamera: (on: boolean) => ipcRenderer.send('ol:toggleCamera', on),
   toggleMic: (on: boolean) => ipcRenderer.send('ol:toggleMic', on),
   toggleDraw: (on: boolean) => ipcRenderer.send('ol:toggleDraw', on),
+  setDrawColor: (color: string) => ipcRenderer.send('ol:setDrawColor', color),
+  clearDraw: () => ipcRenderer.send('ol:clearDraw'),
   setBubbleSize: (s: BubbleSize) => ipcRenderer.send('ol:setBubbleSize', s),
   setLayout: (layout: CameraLayout) => ipcRenderer.send('ol:setLayout', layout),
 
@@ -94,6 +96,7 @@ const api: OpenLoomAPI = {
   // publish to YouTube (guided manual, unlisted)
   youtubePublishStart: (videoId: string) => ipcRenderer.invoke('ol:youtubePublishStart', videoId),
   youtubeSaveLink: (videoId: string, url: string) => ipcRenderer.invoke('ol:youtubeSaveLink', videoId, url),
+  youtubeReadClipboardLink: () => ipcRenderer.invoke('ol:youtubeReadClipboardLink'),
 
   // settings & system
   getSettings: () => ipcRenderer.invoke('ol:getSettings'),
@@ -101,6 +104,8 @@ const api: OpenLoomAPI = {
   pickDirectory: () => ipcRenderer.invoke('ol:pickDirectory'),
   pickFile: (filter: string) => ipcRenderer.invoke('ol:pickFile', filter),
   getPermissions: () => ipcRenderer.invoke('ol:getPermissions'),
+  cameraEffects: () => ipcRenderer.invoke('ol:cameraEffects'),
+  openCameraEffects: () => ipcRenderer.send('ol:openCameraEffects'),
   requestPermission: (kind: string) => ipcRenderer.invoke('ol:requestPermission', kind),
   openSystemSettings: (pane: string) => ipcRenderer.send('ol:openSystemSettings', pane),
   installWhisper: () => ipcRenderer.invoke('ol:installWhisper'),
@@ -157,6 +162,8 @@ const internal: OpenLoomInternal = {
 
   onDrawEnable: subscribe<boolean>('draw:enable'),
   onDrawRipple: subscribe<{ x: number; y: number }>('draw:ripple'),
+  onDrawColor: subscribe<string>('draw:color'),
+  onDrawClear: subscribe<void>('draw:clear'),
 };
 
 contextBridge.exposeInMainWorld('openloom', api);

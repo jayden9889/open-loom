@@ -7,12 +7,39 @@ import './styles/countdown.css';
 const root = document.getElementById('countdown-root')!;
 root.innerHTML = `
   <div class="countdown">
-    <div class="countdown-number" id="countdown-number">3</div>
+    <div class="countdown-disc">
+      <svg class="countdown-ring" viewBox="0 0 168 168" aria-hidden="true">
+        <circle class="countdown-ring-track" cx="84" cy="84" r="80"></circle>
+        <circle class="countdown-ring-arc" id="countdown-ring-arc" cx="84" cy="84" r="80"></circle>
+      </svg>
+      <div class="countdown-digits" id="countdown-digits"></div>
+    </div>
     <div class="countdown-hint">Click to start now &middot; Esc to cancel</div>
   </div>
 `;
 
-const numberEl = document.getElementById('countdown-number')!;
+const digitsEl = document.getElementById('countdown-digits')!;
+const ringArc = document.getElementById('countdown-ring-arc')!;
+
+/** Cross-fade: the outgoing digit shrinks away while the incoming one lands. */
+function showDigit(n: number): void {
+  const outgoing = digitsEl.querySelector('.countdown-digit.is-in');
+  if (outgoing) {
+    outgoing.classList.remove('is-in');
+    outgoing.classList.add('is-out');
+    // Timed removal, not animationend: reduced-motion disables the exit animation.
+    setTimeout(() => outgoing.remove(), 400);
+  }
+  const incoming = document.createElement('span');
+  incoming.className = 'countdown-digit is-in';
+  incoming.textContent = String(n);
+  digitsEl.appendChild(incoming);
+  ringArc.classList.remove('is-filling');
+  // Force reflow so the one-second ring fill replays for this digit.
+  void ringArc.getBoundingClientRect();
+  ringArc.classList.add('is-filling');
+}
+
 let value = 3;
 let finished = false;
 
@@ -29,11 +56,7 @@ const timer = setInterval(() => {
     finish();
     return;
   }
-  numberEl.textContent = String(value);
-  numberEl.classList.remove('pop');
-  // Restart the pop animation.
-  void numberEl.offsetWidth;
-  numberEl.classList.add('pop');
+  showDigit(value);
 }, 1000);
 
 document.addEventListener('click', () => {
@@ -49,4 +72,4 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-numberEl.classList.add('pop');
+showDigit(value);

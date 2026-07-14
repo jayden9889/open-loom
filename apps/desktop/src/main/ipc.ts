@@ -8,6 +8,7 @@ import { listCaptureSources } from './capture';
 import { library, revealVideo, fileUrl, setCustomThumbnail } from './library';
 import * as recorder from './recorder-ipc';
 import { getPermissions, requestPermission, openSystemSettings, systemAudioSupported } from './permissions';
+import { cameraEffectsStatus, openCameraEffectsPanel } from './camera-effects';
 import { getSettingsMasked, setSettings, getSettings } from './settings';
 import { fetchFfmpeg } from './ffmpeg';
 import { validateShortcuts } from './shortcuts';
@@ -23,7 +24,7 @@ import {
   testShareProvider,
   deleteShareComment,
 } from './share';
-import { youtubePublishStart, youtubeSaveLink } from './youtube';
+import { youtubePublishStart, youtubeReadClipboardLink, youtubeSaveLink } from './youtube';
 import { log } from './logger';
 
 function handle(channel: string, fn: (event: IpcMainInvokeEvent, ...args: any[]) => unknown): void {
@@ -53,6 +54,8 @@ export function registerIpc(): void {
   ipcMain.on('ol:toggleCamera', (_e, on: boolean) => recorder.toggleCamera(on));
   ipcMain.on('ol:toggleMic', (_e, on: boolean) => recorder.toggleMic(on));
   ipcMain.on('ol:toggleDraw', (_e, on: boolean) => recorder.toggleDraw(on));
+  ipcMain.on('ol:setDrawColor', (_e, color: string) => recorder.setDrawColor(color));
+  ipcMain.on('ol:clearDraw', () => recorder.clearDraw());
   ipcMain.on('ol:setLayout', (_e, layout: CameraLayout) => recorder.setLayout(layout));
   ipcMain.on('ol:setBubbleSize', (_e, size: 'S' | 'M' | 'L') => {
     setSettings({ bubble: { size } } as Partial<Settings>);
@@ -105,6 +108,7 @@ export function registerIpc(): void {
   // -- publish to YouTube (guided manual, unlisted) ----------------------------
   handle('ol:youtubePublishStart', (_e, id: string) => youtubePublishStart(id));
   handle('ol:youtubeSaveLink', (_e, id: string, url: string) => youtubeSaveLink(id, url));
+  handle('ol:youtubeReadClipboardLink', () => youtubeReadClipboardLink());
 
   // -- settings & system -------------------------------------------------------
   handle('ol:getSettings', () => getSettingsMasked());
@@ -142,6 +146,8 @@ export function registerIpc(): void {
   handle('ol:getPermissions', () => getPermissions());
   handle('ol:requestPermission', (_e, kind: string) => requestPermission(kind));
   ipcMain.on('ol:openSystemSettings', (_e, pane: string) => openSystemSettings(pane));
+  handle('ol:cameraEffects', () => cameraEffectsStatus());
+  ipcMain.on('ol:openCameraEffects', () => openCameraEffectsPanel());
   handle('ol:fetchFfmpeg', () => fetchFfmpeg((line) => broadcast('ol:setup-log', line)));
   ipcMain.on('ol:copyToClipboard', (_e, text: string) => clipboard.writeText(text));
   ipcMain.on('ol:openExternal', (_e, url: string) => {

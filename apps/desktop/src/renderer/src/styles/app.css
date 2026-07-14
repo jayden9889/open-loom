@@ -393,6 +393,25 @@ textarea {
   color: var(--ol-text-secondary);
 }
 
+/* Views ease in when navigation lands (reveal, not choreography). */
+.library,
+.watch,
+.editor,
+.settings {
+  animation: view-in 200ms var(--ol-ease);
+}
+
+@keyframes view-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .spinner {
   width: 13px;
   height: 13px;
@@ -656,12 +675,27 @@ textarea {
   display: flex;
   align-items: center;
   gap: 8px;
-  background: var(--ol-surface);
+  /* Real glass: toasts float over page content, so backdrop-filter works. */
+  background: color-mix(in srgb, var(--ol-surface) 72%, transparent);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  backdrop-filter: blur(14px) saturate(1.4);
   border: 1px solid var(--ol-border-strong);
   border-radius: var(--ol-radius-pill);
   padding: 9px 14px;
   font-weight: 500;
   max-width: 520px;
+  animation: toast-in var(--ol-dur) var(--ol-ease);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .toast-success {
@@ -1055,7 +1089,7 @@ textarea {
 
 .mic-meter-fill {
   height: 100%;
-  background: var(--ol-success);
+  background: var(--ol-accent);
   border-radius: var(--ol-radius-pill);
   transition: width 90ms linear;
 }
@@ -1340,6 +1374,36 @@ textarea {
   height: 100%;
   display: block;
   cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--ol-dur) var(--ol-ease);
+}
+
+.player video.ready {
+  opacity: 1;
+}
+
+/* Shimmer skeleton while the video surface is not yet decodable - the raw
+   element paints green garbage if shown before loadeddata. */
+.player-skeleton {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    rgba(255, 255, 255, 0.03) 38%,
+    rgba(255, 255, 255, 0.1) 50%,
+    rgba(255, 255, 255, 0.03) 62%
+  );
+  background-size: 220% 100%;
+  animation: skeleton-sweep 1.4s var(--ol-ease) infinite;
+}
+
+@keyframes skeleton-sweep {
+  from {
+    background-position: 120% 0;
+  }
+  to {
+    background-position: -120% 0;
+  }
 }
 
 .player-error {
@@ -1353,6 +1417,12 @@ textarea {
   color: #f5f5f7;
   padding: 24px;
   text-align: center;
+}
+
+.player-error-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
 }
 
 .player-big-play {
@@ -1966,6 +2036,12 @@ textarea {
   object-fit: contain;
   display: block;
   cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--ol-dur) var(--ol-ease);
+}
+
+.editor-player video.ready {
+  opacity: 1;
 }
 
 .editor-toolbar {

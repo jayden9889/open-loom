@@ -32,6 +32,15 @@ export function youtubePublishStart(id: string): { titleCopied: boolean } {
 }
 
 /**
+ * Read the clipboard and return the canonical YouTube watch URL when the user
+ * has one copied. The Watch view calls this on window focus mid-publish so the
+ * paste-back field is prefilled the moment they return from the browser.
+ */
+export function youtubeReadClipboardLink(): string | null {
+  return parseYouTubeUrl(clipboard.readText())?.url ?? null;
+}
+
+/**
  * Validate a pasted YouTube link, persist the normalised canonical URL on the
  * video meta (through the existing library update path) and return the updated
  * meta. Throws a user-facing error when the input is not a YouTube link.
@@ -39,5 +48,9 @@ export function youtubePublishStart(id: string): { titleCopied: boolean } {
 export function youtubeSaveLink(id: string, url: string): VideoMeta {
   const parsed = parseYouTubeUrl(url);
   if (!parsed) throw new Error('That does not look like a YouTube link.');
-  return library().update(id, { youtubeUrl: parsed.url });
+  const meta = library().update(id, { youtubeUrl: parsed.url });
+  // The saved link exists to be pasted to a prospect - copying is part of the
+  // save contract itself, not a UI courtesy.
+  clipboard.writeText(parsed.url);
+  return meta;
 }

@@ -5,15 +5,17 @@
  * Test button). About shows ffmpeg/whisper diagnostics.
  */
 import { useEffect, useRef, useState } from 'react';
-import type { AppInfo, PermissionsSnapshot, Settings, ShortcutSettings } from '@shared/types';
+import type { AppInfo, CameraEffectsStatus, PermissionsSnapshot, Settings, ShortcutSettings } from '@shared/types';
 import { Icon } from '../components/icons';
+import { attachHealthyCameraStream, type HealthyCameraSession } from '../media';
 import { Modal, Segmented, Toggle, cleanIpcError, useToasts } from '../components/ui';
 
-type Pane = 'general' | 'recording' | 'shortcuts' | 'transcription' | 'ai' | 'sharing' | 'about';
+type Pane = 'general' | 'recording' | 'facecam' | 'shortcuts' | 'transcription' | 'ai' | 'sharing' | 'about';
 
 const PANES: { id: Pane; label: string }[] = [
   { id: 'general', label: 'General' },
   { id: 'recording', label: 'Recording' },
+  { id: 'facecam', label: 'FaceCam' },
   { id: 'shortcuts', label: 'Shortcuts' },
   { id: 'transcription', label: 'Transcription' },
   { id: 'ai', label: 'AI' },
@@ -107,6 +109,115 @@ function ShortcutField({
   );
 }
 
+/**
+ * Live camera preview for the FaceCam pane. macOS camera effects (Portrait,
+ * Studio Light) are applied by the system INSIDE the camera pipeline, so
+ * this raw preview already shows exactly what recordings get. Frames are
+ * health-checked before anything shows and the camera is released the
+ * moment the pane unmounts.
+ */
+function FacecamPreview({ cameraId, mirror }: { cameraId: string; mirror: boolean }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [state, setState] = useState<'connecting' | 'live' | 'error'>('connecting');
+
+  useEffect(() => {
+    let cancelled = false;
+    let session: HealthyCameraSession | null = null;
+    setState('connecting');
+    void (async () => {
+      try {
+        session = await attachHealthyCameraStream(
+          videoRef.current!,
+          {
+            deviceId: cameraId ? { exact: cameraId } : undefined,
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+          { isCancelled: () => cancelled }
+        );
+        if (cancelled) {
+          session.stop();
+          return;
+        }
+        setState('live');
+      } catch {
+        if (!cancelled) setState('error');
+      }
+    })();
+    return () => {
+      cancelled = true;
+      session?.stop();
+    };
+  }, [cameraId]);
+
+  const overlay: React.CSSProperties = { position: 'absolute', inset: 0, pointerEvents: 'none' };
+  return (
+    <div
+      style={{
+        position: 'relative',
+        width: 320,
+        aspectRatio: '16 / 9',
+        borderRadius: 'var(--ol-radius-card)',
+        overflow: 'hidden',
+        background: 'var(--ol-surface-2)',
+        border: '1px solid var(--ol-border)',
+      }}
+    >
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        style={{
+          display: 'block',
+          width: '100%',
+          height: '100%',
+          objectFit: 'cover',
+          opacity: state === 'live' ? 1 : 0,
+          transition: 'opacity var(--ol-dur) var(--ol-ease)',
+          transform: mirror ? 'scaleX(-1)' : undefined,
+        }}
+      />
+      {state !== 'live' && (
+        <div style={{ ...overlay, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          {state === 'connecting' ? (
+            <div className="spinner" aria-label="Starting camera" />
+          ) : (
+            <span className="settings-note">Camera unavailable</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Live on/off pill for a system camera effect. */
+function EffectState({ on }: { on: boolean }) {
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 7,
+        fontSize: 13,
+        fontWeight: 600,
+        color: on ? 'var(--ol-success)' : 'var(--ol-text-dim)',
+      }}
+    >
+      <span
+        aria-hidden="true"
+        style={{
+          width: 8,
+          height: 8,
+          borderRadius: 999,
+          background: on ? 'var(--ol-success)' : 'var(--ol-border)',
+        }}
+      />
+      {on ? 'On' : 'Off'}
+    </span>
+  );
+}
+
 export function SettingsView({
   settings,
   onUpdate,
@@ -134,6 +245,21 @@ export function SettingsView({
       if (next) push('success', 'Shortcut updated.');
     });
   };
+
+  // macOS camera effects are toggled in the system panel; poll their state
+  // while the FaceCam pane is open so the pills track Control Center live.
+  const [fx, setFx] = useState<CameraEffectsStatus | null>(null);
+  useEffect(() => {
+    if (pane !== 'facecam') return;
+    let alive = true;
+    const read = () => void window.openloom.cameraEffects().then((v) => alive && setFx(v));
+    read();
+    const timer = window.setInterval(read, 1500);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, [pane]);
 
   // Whisper install (live log modal) + AI connection test state.
   const [installOpen, setInstallOpen] = useState(false);
@@ -372,6 +498,43 @@ export function SettingsView({
                   onChange={(mirror) => save({ bubble: { ...s.bubble, mirror } })}
                   label="Mirror camera"
                 />
+              </Row>
+            </section>
+          )}
+
+          {pane === 'facecam' && (
+            <section aria-label="FaceCam">
+              <p className="settings-intro">
+                Your camera's look comes from macOS camera effects: Portrait blurs the room behind you and Studio
+                Light relights your face - matted by the system on the Neural Engine, inside the camera itself. That
+                is why they look native: previews, the bubble and recordings all get the exact same frames, at zero
+                cost to the app.
+              </p>
+              <Row label="Preview" note="Live from your camera - recordings look exactly like this. The camera is released when you leave this pane.">
+                <FacecamPreview cameraId={s.recording.cameraId} mirror={s.bubble.mirror} />
+              </Row>
+              <Row label="Portrait" note="Background blur, matted by macOS.">
+                <EffectState on={!!fx?.portrait} />
+              </Row>
+              <Row label="Studio Light" note="Softbox-style relight of your face.">
+                <EffectState on={!!fx?.studioLight} />
+              </Row>
+              <Row
+                label="Camera effects"
+                note={
+                  fx && !fx.supported
+                    ? 'Not available here: needs macOS on Apple Silicon (built-in camera) or Continuity Camera.'
+                    : 'Toggle Portrait and Studio Light in the system panel. Also reachable from Control Center (the green camera icon) while the camera is on.'
+                }
+              >
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  disabled={fx ? !fx.supported : false}
+                  onClick={() => window.openloom.openCameraEffects()}
+                >
+                  Open Camera Effects…
+                </button>
               </Row>
             </section>
           )}

@@ -1,13 +1,13 @@
 /**
  * Recording HUD (SPEC R7): frameless vertical control bar. Elapsed timer with
- * red dot, pause/resume, stop, restart, cancel, camera layout switch, mic
+ * red dot, pause/resume, stop, restart, cancel, mic
  * toggle, draw toggle. The camera itself is never off - the layout only moves
  * the face between the corner bubble and full frame. A hint strip at the
  * bottom names the hovered control and its configured shortcut (the window is
  * too narrow for side tooltips).
  */
 import { useEffect, useState } from 'react';
-import type { CameraLayout, RecordingState, ShortcutSettings } from '@shared/types';
+import type { RecordingState, ShortcutSettings } from '@shared/types';
 import { DEFAULT_SHORTCUTS } from '@shared/types';
 
 function formatElapsed(sec: number): string {
@@ -64,53 +64,19 @@ const stroke = {
   strokeLinejoin: 'round',
 } as const;
 
-// Signature feature: flip the live camera layout mid-recording. Toggles
-// Screen+Camera (bubble) <-> Camera (full face). The face never leaves the
-// recording, so there is no camera-off state.
-const LAYOUT_ORDER: CameraLayout[] = ['bubble', 'full'];
-const LAYOUT_LABEL: Record<CameraLayout, string> = {
-  bubble: 'Screen + Camera',
-  full: 'Camera',
-  off: 'Screen only',
-};
-
-function nextLayout(l: CameraLayout): CameraLayout {
-  const i = LAYOUT_ORDER.indexOf(l);
-  return LAYOUT_ORDER[(i + 1) % LAYOUT_ORDER.length]!;
-}
-
-function layoutIcon(l: CameraLayout) {
-  if (l === 'full') {
-    // Full-frame camera: a face.
-    return (
-      <svg width="18" height="18" viewBox="0 0 24 24" {...stroke} aria-hidden="true">
-        <circle cx="12" cy="9" r="3.2" />
-        <path d="M5.5 19a6.5 6.5 0 0 1 13 0" />
-      </svg>
-    );
-  }
-  if (l === 'off') {
-    // Screen only: a monitor.
-    return (
-      <svg width="18" height="18" viewBox="0 0 24 24" {...stroke} aria-hidden="true">
-        <rect x="3" y="4.5" width="18" height="13" rx="2" />
-        <path d="M9 20h6" />
-      </svg>
-    );
-  }
-  // Screen + camera bubble.
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" {...stroke} aria-hidden="true">
-      <rect x="3" y="4.5" width="18" height="13" rx="2" />
-      <circle cx="7.5" cy="13.5" r="2.6" fill="currentColor" stroke="none" />
-    </svg>
-  );
-}
+const PEN_COLORS = ['red', 'violet', 'yellow'] as const;
+type PenColor = (typeof PEN_COLORS)[number];
 
 export function Hud() {
   const [state, setState] = useState<RecordingState>({ status: 'recording', elapsedSec: 0 });
   const [shortcuts, setShortcuts] = useState<ShortcutSettings>(DEFAULT_SHORTCUTS);
   const [hint, setHint] = useState<string | null>(null);
+  const [penColor, setPenColor] = useState<PenColor>('red');
+
+  // Sync the overlay's pen to the HUD's colour whenever draw mode turns on.
+  useEffect(() => {
+    if (state.drawOn) window.openloom.setDrawColor(penColor);
+  }, [state.drawOn, penColor]);
 
   useEffect(() => {
     void window.openloomInternal.getRecordingState().then(setState);
@@ -124,8 +90,6 @@ export function Hud() {
   }, []);
 
   const paused = state.status === 'paused';
-  const canLayout = state.mode === 'screen-cam';
-  const layout: CameraLayout = state.cameraLayout ?? 'bubble';
 
   return (
     <div className="hud">
@@ -198,17 +162,6 @@ export function Hud() {
       <div className="hud-sep" aria-hidden="true" />
 
       <HudButton
-        label={`Layout: ${LAYOUT_LABEL[layout]}`}
-        hint={canLayout ? `${LAYOUT_LABEL[layout]} - tap to switch` : 'Layout needs screen + camera'}
-        onHint={setHint}
-        onClick={() => window.openloom.setLayout(nextLayout(layout))}
-        active={canLayout && layout !== 'off'}
-        disabled={!canLayout}
-      >
-        {layoutIcon(layout)}
-      </HudButton>
-
-      <HudButton
         label={state.micOn ? 'Mute microphone' : 'Unmute microphone'}
         hint={state.micOn ? 'Mute mic' : 'Unmute mic'}
         onHint={setHint}
@@ -239,6 +192,48 @@ export function Hud() {
           <path d="M4 20c.6-2.7 1.4-4 3-5.7L16.6 4.7a2.1 2.1 0 0 1 3 3L10 17.3c-1.7 1.6-3 2.3-6 2.7Z" />
         </svg>
       </HudButton>
+
+      {state.drawOn && (
+        <div className="hud-draw-tools">
+          {PEN_COLORS.map((c) => (
+            <button
+              key={c}
+              type="button"
+              className={`hud-pen hud-pen-${c}${penColor === c ? ' selected' : ''}`}
+              aria-label={`${c} pen`}
+              onMouseEnter={() => setHint(`${c.charAt(0).toUpperCase()}${c.slice(1)} pen`)}
+              onMouseLeave={() => setHint(null)}
+              onClick={() => setPenColor(c)}
+            />
+          ))}
+          <button
+            type="button"
+            className="hud-btn hud-pen-clear"
+            aria-label="Clear all ink"
+            onMouseEnter={() => setHint('Clear ink now')}
+            onMouseLeave={() => setHint(null)}
+            onClick={() => window.openloom.clearDraw()}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" {...stroke} aria-hidden="true">
+              <path d="m14 5 5 5-8.5 8.5a2 2 0 0 1-1.4.6H6l-2-2 10-12Z" />
+              <path d="M11 8.5 15.5 13" />
+              <path d="M13 19h7" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className="hud-btn hud-draw-exit"
+            aria-label="Done drawing"
+            onMouseEnter={() => setHint('Done - ink fades away')}
+            onMouseLeave={() => setHint(null)}
+            onClick={() => window.openloom.toggleDraw(false)}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" {...stroke} aria-hidden="true">
+              <path d="m5 12.5 5 5L19 7" />
+            </svg>
+          </button>
+        </div>
+      )}
 
       <div className="hud-hint" aria-live="polite">
         {hint ?? ''}

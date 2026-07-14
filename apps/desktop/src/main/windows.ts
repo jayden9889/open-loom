@@ -182,14 +182,18 @@ export function showLauncher(opts?: { inactive?: boolean }): BrowserWindow {
   });
   loadPage(launcherWindow, 'launcher');
   launcherWindow.on('closed', () => {
+    log.info('launcher window closed');
     launcherWindow = null;
   });
   return launcherWindow;
 }
 
 /** Destroy (not hide) so the camera preview stream dies with the renderer. */
-export function destroyLauncher(): void {
-  if (launcherWindow && !launcherWindow.isDestroyed()) launcherWindow.destroy();
+export function destroyLauncher(reason = 'unspecified'): void {
+  if (launcherWindow && !launcherWindow.isDestroyed()) {
+    log.info(`launcher destroyed (${reason})`);
+    launcherWindow.destroy();
+  }
   launcherWindow = null;
 }
 
@@ -241,7 +245,9 @@ function excludeFromCapture(win: BrowserWindow): void {
   }
 }
 
-export const HUD_SIZE = { width: 68, height: 432 };
+export const HUD_SIZE = { width: 68, height: 388 };
+/** Extra height for the draw toolbar (pen colours + clear + done) while ink is on. */
+export const HUD_DRAW_EXTRA = 155;
 
 /** Frameless control bar, left-center of the recorded display (SPEC R7). */
 export function showHud(display: Display): BrowserWindow {
@@ -257,6 +263,12 @@ export function showHud(display: Display): BrowserWindow {
     true
   );
   hudWindow.setMovable(true);
+  // One window LEVEL above every other overlay (draw surface included).
+  // A same-level moveTop() is not enough: clicking the interactive draw
+  // canvas re-raises it and buries the HUD, trapping the presenter in pen
+  // mode. A higher level can never be clicked over - the cursor is the
+  // normal pointer over the panel and the pen everywhere else.
+  hudWindow.setAlwaysOnTop(true, 'screen-saver', 1);
   excludeFromCapture(hudWindow);
   hudWindow.once('ready-to-show', () => hudWindow?.showInactive());
   loadPage(hudWindow, 'hud');
@@ -402,6 +414,24 @@ export function setDrawInteractive(interactive: boolean): void {
   drawWindow.setIgnoreMouseEvents(!interactive, { forward: true });
   drawWindow.webContents.send('draw:enable', interactive);
   if (interactive) drawWindow.focus();
+}
+
+/** Grow/shrink the HUD to make room for the draw toolbar. */
+export function setHudExpanded(expanded: boolean): void {
+  if (!hudWindow || hudWindow.isDestroyed()) return;
+  const b = hudWindow.getBounds();
+  const target = HUD_SIZE.height + (expanded ? HUD_DRAW_EXTRA : 0);
+  if (b.height !== target) hudWindow.setBounds({ ...b, height: target });
+}
+
+export function sendDrawColor(color: string): void {
+  if (!drawWindow || drawWindow.isDestroyed()) return;
+  drawWindow.webContents.send('draw:color', color);
+}
+
+export function sendDrawClear(): void {
+  if (!drawWindow || drawWindow.isDestroyed()) return;
+  drawWindow.webContents.send('draw:clear');
 }
 
 export function getDrawWindow(): BrowserWindow | null {

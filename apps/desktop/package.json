@@ -12,7 +12,8 @@
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.preload.json && tsc --noEmit -p tsconfig.web.json",
     "start": "electron-vite preview",
-    "dist": "electron-vite build && electron-builder --config electron-builder.yml"
+    "dist": "electron-vite build && electron-builder --config electron-builder.yml",
+    "postdist": "node -e \"require('fs').rmSync('../../release/mac-arm64',{recursive:true,force:true})\""
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1079.0",
@@ -23,6 +24,7 @@
     "react-dom": "^18.3.1"
   },
   "optionalDependencies": {
-    "uiohook-napi": "^1.5.5"
+    "uiohook-napi": "^1.5.5",
+    "openloom-camera-effects": "file:./native/camera-effects"
   }
 }

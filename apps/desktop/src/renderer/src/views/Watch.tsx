@@ -68,6 +68,7 @@ type Tab = 'details' | 'transcript' | 'chapters' | 'activity';
 
 export function WatchView({
   id,
+  freshRecording = false,
   folders,
   settings,
   onBack,
@@ -77,6 +78,8 @@ export function WatchView({
   onOpenSharingSettings,
 }: {
   id: string;
+  /** True when this view opened straight off a finished recording (auto-expands the YouTube publish panel). */
+  freshRecording?: boolean;
   folders: Folder[];
   settings: Settings;
   onBack: () => void;
@@ -102,6 +105,7 @@ export function WatchView({
   const [cues, setCues] = useState<VttCue[] | null>(null);
   const [hoverT, setHoverT] = useState<{ x: number; t: number } | null>(null);
   const [videoError, setVideoError] = useState<string | null>(null);
+  const [videoReady, setVideoReady] = useState(false);
   const [titleDraft, setTitleDraft] = useState<string | null>(null);
   const [descDraft, setDescDraft] = useState<string | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
@@ -115,8 +119,37 @@ export function WatchView({
   const [youtubeDraft, setYoutubeDraft] = useState('');
   const [youtubeError, setYoutubeError] = useState<string | null>(null);
 
+  // A recording that just landed opens straight into the publish flow: the
+  // YouTube panel arrives expanded so getting the link is one click, not two.
+  useEffect(() => {
+    if (freshRecording) setYoutubeOpen(true);
+  }, [freshRecording, id]);
+
+  // Mid-publish, returning from the browser with the watch link copied
+  // prefills the paste-back field, so saving is a single click.
+  useEffect(() => {
+    if (!youtubeOpen || meta?.youtubeUrl) return;
+    const onFocus = () => {
+      void window.openloom.youtubeReadClipboardLink().then(
+        (url) => {
+          if (url) setYoutubeDraft((cur) => (cur.trim() ? cur : url));
+        },
+        () => undefined
+      );
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [youtubeOpen, meta?.youtubeUrl]);
+
   const videoUrl = `${window.openloom.fileUrl(id, 'video.mp4')}?v=${refresh}`;
   const vttUrl = `${window.openloom.fileUrl(id, 'transcript.vtt')}?v=${refresh}`;
+  const posterUrl = `${window.openloom.fileUrl(id, 'thumb.jpg')}?v=${refresh}`;
+
+  // The raw video surface renders decode garbage until it has real frames -
+  // keep it invisible (skeleton on top) until loadeddata fires.
+  useEffect(() => {
+    setVideoReady(false);
+  }, [videoUrl]);
 
   const transcriptionConfigured = settings.transcription.engine !== 'off';
   const aiConfigured = settings.ai.provider !== 'off';
@@ -399,29 +432,57 @@ export function WatchView({
               <div className="player-error">
                 <Icon.Warning width={28} height={28} />
                 <p>{videoError}</p>
+                <div className="player-error-actions">
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => {
+                      setVideoError(null);
+                      setRefresh((r) => r + 1);
+                    }}
+                  >
+                    <Icon.Refresh width={15} height={15} />
+                    Try again
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => window.openloom.revealVideo(id)}
+                  >
+                    <Icon.Reveal width={15} height={15} />
+                    Reveal in Finder
+                  </button>
+                </div>
               </div>
             ) : (
-              <video
-                ref={videoRef}
-                src={videoUrl}
-                onClick={togglePlay}
-                onPlay={() => setPlaying(true)}
-                onPause={() => setPlaying(false)}
-                onTimeUpdate={(e) => setCurrent((e.target as HTMLVideoElement).currentTime)}
-                onDurationChange={(e) => setDuration((e.target as HTMLVideoElement).duration || meta.durationSec)}
-                onProgress={(e) => {
-                  const v = e.target as HTMLVideoElement;
-                  const ranges: { start: number; end: number }[] = [];
-                  for (let i = 0; i < v.buffered.length; i++) {
-                    ranges.push({ start: v.buffered.start(i), end: v.buffered.end(i) });
-                  }
-                  setBuffered(ranges);
-                }}
-                onError={() => setVideoError('This video file could not be played. It may still be processing or the file may have moved.')}
-              />
+              <>
+                {!videoReady && <div className="player-skeleton" aria-hidden="true" />}
+                <video
+                  ref={videoRef}
+                  className={videoReady ? 'ready' : ''}
+                  src={videoUrl}
+                  poster={posterUrl}
+                  preload="auto"
+                  onClick={togglePlay}
+                  onLoadedData={() => setVideoReady(true)}
+                  onPlay={() => setPlaying(true)}
+                  onPause={() => setPlaying(false)}
+                  onTimeUpdate={(e) => setCurrent((e.target as HTMLVideoElement).currentTime)}
+                  onDurationChange={(e) => setDuration((e.target as HTMLVideoElement).duration || meta.durationSec)}
+                  onProgress={(e) => {
+                    const v = e.target as HTMLVideoElement;
+                    const ranges: { start: number; end: number }[] = [];
+                    for (let i = 0; i < v.buffered.length; i++) {
+                      ranges.push({ start: v.buffered.start(i), end: v.buffered.end(i) });
+                    }
+                    setBuffered(ranges);
+                  }}
+                  onError={() => setVideoError('This video file could not be played. It may still be processing or the file may have moved.')}
+                />
+              </>
             )}
 
-            {!playing && !videoError && (
+            {!playing && !videoError && videoReady && (
               <button type="button" className="player-big-play" aria-label="Play" onClick={togglePlay}>
                 <Icon.Play width={30} height={30} />
               </button>
@@ -691,10 +752,16 @@ export function WatchView({
                     </>
                   ) : (
                     <>
+                      <button type="button" className="btn-primary" onClick={startYouTubePublish}>
+                        <Icon.Play width={15} height={15} />
+                        Open YouTube upload
+                      </button>
                       <ol className="youtube-steps">
-                        <li>Drop your video - it is revealed in Finder</li>
-                        <li>Set Visibility to Unlisted</li>
-                        <li>Paste the link below</li>
+                        <li>Your MP4 is revealed in Finder - drop it on the upload page</li>
+                        <li>
+                          Set Visibility to <strong>Unlisted</strong>
+                        </li>
+                        <li>Copy the watch link and come back - it fills in below</li>
                       </ol>
                       <label className="field-label" htmlFor="youtube-url">
                         YouTube link

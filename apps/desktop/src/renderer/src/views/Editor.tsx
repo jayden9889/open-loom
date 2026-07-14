@@ -59,6 +59,7 @@ export function EditorView({
   const [libraryVideos, setLibraryVideos] = useState<VideoMeta[]>([]);
   const [savedBanner, setSavedBanner] = useState(false);
   const [videoError, setVideoError] = useState<string | null>(null);
+  const [videoReady, setVideoReady] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
@@ -71,6 +72,16 @@ export function EditorView({
     () => `${window.openloom.fileUrl(id, 'video.mp4')}?v=${fileVersion}`,
     [id, fileVersion]
   );
+  const posterUrl = useMemo(
+    () => `${window.openloom.fileUrl(id, 'thumb.jpg')}?v=${fileVersion}`,
+    [id, fileVersion]
+  );
+
+  // Keep the raw video surface hidden until it has decodable frames (it
+  // renders green garbage before then); the skeleton covers the wait.
+  useEffect(() => {
+    setVideoReady(false);
+  }, [videoUrl]);
 
   const resetSegs = useCallback((dur: number) => {
     setSegs([{ start: 0, end: dur, kept: true }]);
@@ -505,19 +516,39 @@ export function EditorView({
           <div className="player-error">
             <Icon.Warning width={28} height={28} />
             <p>{videoError}</p>
+            <div className="player-error-actions">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  setVideoError(null);
+                  setFileVersion((v) => v + 1);
+                }}
+              >
+                <Icon.Refresh width={15} height={15} />
+                Try again
+              </button>
+            </div>
           </div>
         ) : (
-          <video
-            ref={videoRef}
-            src={videoUrl}
-            onClick={togglePlay}
-            onPlay={() => setPlaying(true)}
-            onPause={() => setPlaying(false)}
-            onTimeUpdate={(e) => setCurrent((e.target as HTMLVideoElement).currentTime)}
-            onError={() => setVideoError('This video file could not be loaded for editing.')}
-          />
+          <>
+            {!videoReady && <div className="player-skeleton" aria-hidden="true" />}
+            <video
+              ref={videoRef}
+              className={videoReady ? 'ready' : ''}
+              src={videoUrl}
+              poster={posterUrl}
+              preload="auto"
+              onClick={togglePlay}
+              onLoadedData={() => setVideoReady(true)}
+              onPlay={() => setPlaying(true)}
+              onPause={() => setPlaying(false)}
+              onTimeUpdate={(e) => setCurrent((e.target as HTMLVideoElement).currentTime)}
+              onError={() => setVideoError('This video file could not be loaded for editing.')}
+            />
+          </>
         )}
-        {!playing && !videoError && (
+        {!playing && !videoError && videoReady && (
           <button type="button" className="player-big-play" aria-label="Play preview" onClick={togglePlay}>
             <Icon.Play width={30} height={30} />
           </button>

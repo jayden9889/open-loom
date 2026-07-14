@@ -35,7 +35,10 @@ import {
   resizeBubbleKeepAnchor,
   setBubbleFullScreen,
   setBubbleLayout,
+  sendDrawClear,
+  sendDrawColor,
   setBubbleVisible,
+  setHudExpanded,
   setDrawInteractive,
   showBubble,
   showCountdown,
@@ -107,7 +110,7 @@ function emitState(partial?: Partial<RecordingState>): void {
   broadcast('ol:recording-state', lastState);
   // The launcher follows the session: it disappears while a recording runs
   // (destroyed, so its camera preview is released) and returns when idle.
-  if (wasIdle && lastState.status !== 'idle') destroyLauncher();
+  if (wasIdle && lastState.status !== 'idle') destroyLauncher(`state ${lastState.status}`);
   else if (!wasIdle && lastState.status === 'idle') showLauncher({ inactive: true });
 }
 
@@ -582,8 +585,21 @@ export function toggleDraw(on: boolean): void {
   if (!rec) return;
   if (!rec.opts.sourceIsDisplay || rec.opts.mode === 'cam') return; // window/cam capture: draw not available
   rec.drawOn = on;
+  // Leaving draw mode is the signal that the annotation is over: the
+  // overlay fades its ink out the moment it is disabled (see draw.ts).
   setDrawInteractive(on);
+  setHudExpanded(on);
   emitState();
+}
+
+export function setDrawColor(color: string): void {
+  const rec = active;
+  if (!rec || !rec.drawOn) return;
+  sendDrawColor(color);
+}
+
+export function clearDraw(): void {
+  sendDrawClear();
 }
 
 export function setBubbleSize(size: 'S' | 'M' | 'L'): void {

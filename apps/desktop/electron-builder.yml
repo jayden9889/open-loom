@@ -26,6 +26,7 @@ extraResources:
 # fine without it, so never fail the build when it is absent.
 asarUnpack:
   - "**/node_modules/uiohook-napi/**"
+  - "**/node_modules/openloom-camera-effects/**"
 
 mac:
   category: public.app-category.productivity

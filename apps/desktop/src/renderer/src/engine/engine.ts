@@ -8,7 +8,7 @@
 import type { CameraLayout, EngineBeginPayload } from '@shared/types';
 import { BUBBLE_SIZES } from '@shared/types';
 import { cameraDrawPlan } from './layout';
-import { getUserMediaResilient } from '../media';
+import { attachHealthyCameraStream, getUserMediaResilient } from '../media';
 
 const internal = window.openloomInternal;
 
@@ -210,21 +210,31 @@ async function buildSession(p: EngineBeginPayload): Promise<{
 
   if (opts.mode === 'cam') {
     const dims = CAM_DIMENSIONS[opts.quality] ?? CAM_DIMENSIONS['1080p']!;
-    const camStream = await getUserMediaResilient({
-      video: {
+    // Health-checked: a macOS capture race can hand over a solid-green feed
+    // that passes every readiness event - recording it would bake the green
+    // into the video, so frames are pixel-verified before the recorder starts.
+    const probe = document.createElement('video');
+    probe.muted = true;
+    const camSession = await attachHealthyCameraStream(
+      probe,
+      {
         deviceId: opts.cameraId ? { exact: opts.cameraId } : undefined,
         width: { ideal: dims.width },
         height: { ideal: dims.height },
         frameRate: { ideal: opts.fps },
       },
-      audio: opts.micOn
-        ? {
-            deviceId: opts.micId ? { exact: opts.micId } : undefined,
-            echoCancellation: true,
-            noiseSuppression: true,
-          }
-        : false,
-    });
+      {
+        audio: opts.micOn
+          ? {
+              deviceId: opts.micId ? { exact: opts.micId } : undefined,
+              echoCancellation: true,
+              noiseSuppression: true,
+            }
+          : false,
+      }
+    );
+    const camStream = camSession.stream;
+    probe.srcObject = null;
     allStreams.push(camStream);
     const vt = camStream.getVideoTracks()[0];
     if (!vt) throw new Error('The camera did not provide a video stream.');
@@ -286,15 +296,17 @@ async function buildSession(p: EngineBeginPayload): Promise<{
       // mid-recording; if it is denied or missing the window records alone.
       let camVideo: HTMLVideoElement | null = null;
       try {
-        const camStream = await getUserMediaResilient({
-          video: {
-            deviceId: opts.cameraId ? { exact: opts.cameraId } : undefined,
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-          },
+        // Health-checked (see cam-mode note): never burn a green feed into
+        // the composite.
+        const el = document.createElement('video');
+        el.muted = true;
+        const camSession = await attachHealthyCameraStream(el, {
+          deviceId: opts.cameraId ? { exact: opts.cameraId } : undefined,
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
         });
-        allStreams.push(camStream);
-        camVideo = await attachVideo(camStream);
+        allStreams.push(camSession.stream);
+        camVideo = el;
       } catch {
         camVideo = null;
       }

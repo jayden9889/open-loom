@@ -99,8 +99,21 @@ a:hover { text-decoration: underline; }
 @media (max-width: 960px) { .layout.has-rail { grid-template-columns: 1fr; } }
 
 .player-card { background: var(--ol-surface); border-radius: var(--ol-radius-card); box-shadow: var(--ol-elev-card); overflow: hidden; border: 1px solid var(--ol-border); }
-.video-box { position: relative; background: #000; }
-.video-box video { display: block; width: 100%; max-height: 72vh; background: #000; }
+.video-box { position: relative; background: #0f0f13; }
+.video-box video { display: block; width: 100%; max-height: 72vh; background: #0f0f13; }
+/* No poster: the raw surface can paint decode garbage before frames exist -
+   keep it invisible until loadeddata, with a thin waiting ring behind. */
+.video-box video.nothumb { opacity: 0; transition: opacity 180ms cubic-bezier(0.32, 0.72, 0.24, 1); }
+.video-box video.nothumb.ready { opacity: 1; }
+.video-wait {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+}
+.video-wait .ring {
+  width: 28px; height: 28px; border-radius: 50%;
+  border: 2px solid rgba(255,255,255,0.16); border-top-color: #635bff;
+  animation: ol-spin 0.9s linear infinite;
+}
+@keyframes ol-spin { to { transform: rotate(360deg); } }
 .big-play {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   color: #fff; transition: opacity var(--ol-ease) 180ms;
@@ -281,6 +294,15 @@ const WATCH_JS = String.raw`
   var data = JSON.parse(document.getElementById('ol-data').textContent);
   var video = document.getElementById('ol-video');
   var SPEEDS = [0.8, 1, 1.2, 1.5, 1.7, 2, 2.5];
+
+  // Gated no-poster surface: reveal only once real frames exist.
+  function revealVideo() {
+    video.classList.add('ready');
+    var w = document.getElementById('ol-wait');
+    if (w) w.remove();
+  }
+  if (video.readyState >= 2) revealVideo();
+  else video.addEventListener('loadeddata', revealVideo, { once: true });
 
   function $(id) { return document.getElementById(id); }
   function fmt(sec) {
@@ -749,9 +771,10 @@ export function renderWatchPage(data: WatchPageData): string {
 
   const playerHtml = `<div class="player-card">
   <div class="video-box" id="ol-videobox">
-    <video id="ol-video" src="/v/${data.id}/stream" preload="metadata"${data.hasThumb ? ` poster="/v/${data.id}/thumb.jpg"` : ''} playsinline>
+    <video id="ol-video"${data.hasThumb ? '' : ' class="nothumb"'} src="/v/${data.id}/stream" preload="${data.hasThumb ? 'metadata' : 'auto'}"${data.hasThumb ? ` poster="/v/${data.id}/thumb.jpg"` : ''} playsinline>
       ${data.hasCaptions ? `<track kind="subtitles" label="Captions" srclang="en" src="/v/${data.id}/captions.vtt">` : ''}
     </video>
+    ${data.hasThumb ? '' : '<div class="video-wait" id="ol-wait" aria-hidden="true"><span class="ring"></span></div>'}
     <button type="button" class="big-play" id="ol-bigplay" aria-label="Play"><span class="disc">${ICONS.play}</span></button>
     ${data.embed ? `<span class="embed-title">${escapeHtml(data.title)}</span>` : ''}
   </div>

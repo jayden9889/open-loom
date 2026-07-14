@@ -1,5 +1,11 @@
 @import '@shared/design-tokens.css';
 
+/* Author display rules below would beat the UA's [hidden] rule - restate it
+   globally for this page so state layers can never leak over the video. */
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   margin: 0;
@@ -14,14 +20,19 @@ body {
   height: 100%;
 }
 
+/* The circle is a floating glass object over the desktop: layered translucent
+   fill with a hairline light border and a soft top highlight (faux glass -
+   there is no page content behind an overlay window to backdrop-blur). */
 .bubble {
   position: relative;
   width: 100%;
   height: 100%;
   border-radius: 50%;
   overflow: hidden;
-  background: #101014;
-  border: 2px solid rgba(255, 255, 255, 0.85);
+  background:
+    linear-gradient(155deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.02) 38%),
+    rgba(18, 18, 22, 0.86);
+  border: 1px solid rgba(255, 255, 255, 0.28);
   box-sizing: border-box;
   -webkit-app-region: drag;
 }
@@ -30,29 +41,49 @@ body {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  opacity: 0;
+  transition: opacity var(--ol-dur) var(--ol-ease);
 }
 
-/* Full-frame camera layout: the window covers the whole display, so drop the
-   circle, border and drag region and hide the size controls. */
-.bubble.full {
-  border-radius: 0;
-  border: none;
-  -webkit-app-region: no-drag;
+.bubble.live #bubble-video {
+  opacity: 1;
 }
 
-.bubble.full .bubble-controls {
-  display: none;
-}
-
-.bubble-off {
+/* Connecting / error layer. Sits over the (still invisible) video. */
+.bubble-state {
   position: absolute;
   inset: 0;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  color: #f5f5f7;
-  font-size: 12px;
-  background: #101014;
+  gap: 8px;
+  color: rgba(245, 245, 247, 0.82);
+}
+
+/* Thin spinning arc: premium loading ring, no text needed in a small circle. */
+.bubble-ring {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.16);
+  border-top-color: var(--ol-accent);
+  animation: bubble-spin 0.9s linear infinite;
+}
+
+@keyframes bubble-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.bubble-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: rgba(245, 245, 247, 0.72);
   text-align: center;
 }
 
@@ -76,8 +107,9 @@ body {
   width: 26px;
   height: 26px;
   border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.35);
-  background: rgba(20, 20, 24, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: linear-gradient(155deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.04)),
+    rgba(24, 24, 28, 0.75);
   color: #f5f5f7;
   font-size: 11px;
   font-weight: 600;
@@ -87,10 +119,12 @@ body {
   align-items: center;
   justify-content: center;
   padding: 0;
+  transition: background var(--ol-dur-fast) var(--ol-ease);
 }
 
 .bubble-controls button:hover {
-  background: rgba(60, 60, 68, 0.95);
+  background: linear-gradient(155deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.08)),
+    rgba(44, 44, 50, 0.85);
 }
 
 .bubble-controls button.active {

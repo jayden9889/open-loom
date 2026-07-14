@@ -13,6 +13,10 @@ export default defineConfig({
     build: {
       rollupOptions: {
         input: { index: resolve(__dirname, 'src/main/index.ts') },
+        // Native modules: must load from node_modules at runtime so their
+        // binary lookup works (bundling breaks __dirname-relative paths).
+        // optionalDependencies are not covered by externalizeDepsPlugin.
+        external: ['uiohook-napi', 'openloom-camera-effects'],
       },
     },
   },
