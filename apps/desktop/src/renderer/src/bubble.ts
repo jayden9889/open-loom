@@ -67,9 +67,15 @@ function applyMirror(): void {
 // 'full' turns the (window-resized) bubble into an opaque full-frame camera so
 // full-display capture records the face full-screen. The window itself is
 // resized by the main process; this just swaps the circle styling for a
-// rectangular cover-fit (SPEC R6).
+// rectangular cover-fit (SPEC R6). A layout flip arrives as fade-out ->
+// (main resizes the invisible window) -> set-layout, which fades back in.
+window.openloomInternal.onBubbleFadeOut(() => {
+  bubbleEl.classList.add('faded');
+});
 window.openloomInternal.onBubbleLayout((layout) => {
   bubbleEl.classList.toggle('full', layout === 'full');
+  // Next frame so the shape change lands before the fade-in starts.
+  requestAnimationFrame(() => bubbleEl.classList.remove('faded'));
 });
 
 async function startCamera(): Promise<void> {

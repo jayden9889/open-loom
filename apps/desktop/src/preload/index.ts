@@ -52,6 +52,7 @@ const api: OpenLoomAPI = {
   setDrawColor: (color: string) => ipcRenderer.send('ol:setDrawColor', color),
   clearDraw: () => ipcRenderer.send('ol:clearDraw'),
   setBubbleSize: (s: BubbleSize) => ipcRenderer.send('ol:setBubbleSize', s),
+  setCameraLayout: (layout: CameraLayout) => ipcRenderer.send('ol:setCameraLayout', layout),
 
   // library
   listVideos: () => ipcRenderer.invoke('ol:listVideos'),
@@ -155,6 +156,7 @@ const internal: OpenLoomInternal = {
   onEngineSetMic: subscribe<boolean>('engine:set-mic'),
   onEngineSetBubble: subscribe<{ size: BubbleSize; mirror: boolean }>('engine:set-bubble'),
   onBubbleLayout: subscribe<CameraLayout>('bubble:set-layout'),
+  onBubbleFadeOut: subscribeVoid('bubble:fade-out'),
 
   countdownDone: () => ipcRenderer.send('countdown:done'),
   countdownCancel: () => ipcRenderer.send('countdown:cancel'),

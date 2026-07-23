@@ -27,10 +27,14 @@ import {
   destroyDrawOverlay,
   destroyHud,
   destroyLauncher,
+  destroySwitcher,
   displayForSource,
+  fadeBubbleToLayout,
+  getBubbleWindow,
   getDrawWindow,
   getOrCreateEngineWindow,
   positionBubbleCircle,
+  positionBubbleFull,
   resizeBubbleKeepAnchor,
   setBubbleLayout,
   sendDrawClear,
@@ -43,6 +47,7 @@ import {
   showDrawOverlay,
   showHud,
   showLauncher,
+  showSwitcher,
 } from './windows';
 import { setPendingCapture, clearPendingCapture, displayIdForSource } from './capture';
 import * as ffmpeg from './ffmpeg';
@@ -99,7 +104,9 @@ function emitState(partial?: Partial<RecordingState>): void {
       cameraLayout: active.cameraLayout,
       micOn: active.micOn,
       drawOn: active.drawOn,
-      drawAvailable: active.opts.mode !== 'cam' && !!active.opts.sourceIsDisplay,
+      // Full-face layout has no screen to draw on; cam-only never does.
+      drawAvailable:
+        active.opts.mode !== 'cam' && !!active.opts.sourceIsDisplay && active.cameraLayout !== 'full',
       ...partial,
     };
   } else {
@@ -158,6 +165,7 @@ function closeSessionWindows(): void {
   destroyBubble();
   destroyCountdown();
   destroyDrawOverlay();
+  destroySwitcher();
 }
 
 // ---------------------------------------------------------------------------
@@ -215,6 +223,11 @@ export async function startRecording(opts: RecordingOptions): Promise<void> {
     if (opts.mode !== 'cam' && opts.sourceId) {
       setPendingCapture(opts.sourceId, opts.systemAudio);
     }
+
+    // Warm the face bubble NOW: the window and its camera stream spin up in
+    // parallel with the engine + countdown, so the circle is live from the
+    // first recorded frame instead of appearing ~2s into the video.
+    if (opts.mode === 'screen-cam') showBubble(display, settings.bubble.size);
 
     const engine = getOrCreateEngineWindow();
     await whenEngineReady(engine.webContents.id);
@@ -311,6 +324,7 @@ async function beginEngineCapture(): Promise<void> {
   showHud(rec.display);
   if (rec.opts.mode === 'screen-cam' && rec.cameraOn) {
     showBubble(rec.display, settings.bubble.size);
+    showSwitcher(rec.display);
   }
   if (rec.opts.mode !== 'cam' && rec.opts.sourceIsDisplay) {
     showDrawOverlay(rec.display);
@@ -485,6 +499,9 @@ async function startRecordingWithoutCountdown(opts: RecordingOptions): Promise<v
     stoppedResolvers: [],
   };
   if (opts.mode !== 'cam' && opts.sourceId) setPendingCapture(opts.sourceId, opts.systemAudio);
+  // Same early warm-up as the countdown path: the camera connects while the
+  // engine rebuilds its capture, so restart also starts with a live circle.
+  if (opts.mode === 'screen-cam') showBubble(display, getSettings().bubble.size);
   const engine = getOrCreateEngineWindow();
   await whenEngineReady(engine.webContents.id);
   await beginEngineCapture();
@@ -520,23 +537,43 @@ export function toggleCamera(on: boolean): void {
 }
 
 /**
- * Apply a camera layout across both capture paths (bubble/off - the full-
- * frame "circle enlarger" layout was cut 2026-07-14, no UI reaches it):
- * - Window-composite: the engine canvas compositor redraws.
- * - Full-display: the bubble is a real OS window the display capture sees.
+ * Switch the live camera layout from the bottom-screen slider (Screen+Camera
+ * recordings only): 'bubble' = face + screen, 'full' = full face.
+ */
+export function setCameraLayout(layout: CameraLayout): void {
+  const rec = active;
+  if (!rec || (rec.status !== 'recording' && rec.status !== 'paused')) return;
+  applyLayout(rec, layout);
+}
+
+/**
+ * Apply a camera layout across both capture paths:
+ * - Window-composite: the engine canvas compositor crossfades between layouts.
+ * - Full-display: the bubble is a real OS window the display capture sees; a
+ *   bubble <-> full flip fades out, swaps bounds and fades back in.
  */
 function applyLayout(rec: ActiveRecording, layout: CameraLayout): void {
   // Only Screen+Camera recordings have a switchable camera. Screen-only has no
   // camera; cam-only is already full face.
   if (rec.opts.mode !== 'screen-cam') return;
+  if (rec.cameraLayout === layout) return;
+  const prev = rec.cameraLayout;
   rec.cameraLayout = layout;
   rec.cameraOn = layout !== 'off';
   if (layout !== 'off') rec.lastCamLayout = layout;
 
+  // Full face leaves nothing to draw on: an active pen session ends here
+  // (the overlay fades its ink out on disable).
+  if (layout === 'full' && rec.drawOn) {
+    rec.drawOn = false;
+    setDrawInteractive(false);
+    setHudExpanded(false);
+  }
+
   getOrCreateEngineWindow().webContents.send('engine:set-layout', layout);
 
   if (rec.opts.sourceIsDisplay) {
-    applyFullDisplayBubble(rec, layout);
+    applyFullDisplayBubble(rec, layout, prev);
   } else {
     // Window-composite: the floating bubble window is only a preview; the
     // compositor burns the camera in. Mirror visibility, leave shape alone.
@@ -545,14 +582,22 @@ function applyLayout(rec: ActiveRecording, layout: CameraLayout): void {
   emitState();
 }
 
-function applyFullDisplayBubble(rec: ActiveRecording, layout: CameraLayout): void {
+function applyFullDisplayBubble(rec: ActiveRecording, layout: CameraLayout, prev: CameraLayout): void {
   if (layout === 'off') {
     setBubbleVisible(false);
     return;
   }
   const size = getSettings().bubble.size;
+  const flip = (prev === 'bubble' && layout === 'full') || (prev === 'full' && layout === 'bubble');
+  if (flip && getBubbleWindow()) {
+    // Live bubble <-> full flip: fade handles bounds + shape while invisible.
+    // showBubble would snap the window back to a circle first, so skip it.
+    fadeBubbleToLayout(rec.display, size, layout);
+    return;
+  }
   showBubble(rec.display, size);
-  positionBubbleCircle(rec.display, size);
+  if (layout === 'full') positionBubbleFull(rec.display);
+  else positionBubbleCircle(rec.display, size);
   setBubbleLayout(layout);
 }
 
@@ -568,6 +613,7 @@ export function toggleDraw(on: boolean): void {
   const rec = active;
   if (!rec) return;
   if (!rec.opts.sourceIsDisplay || rec.opts.mode === 'cam') return; // window/cam capture: draw not available
+  if (on && rec.cameraLayout === 'full') return; // full face on screen: nothing to draw on
   rec.drawOn = on;
   // Leaving draw mode is the signal that the annotation is over: the
   // overlay fades its ink out the moment it is disabled (see draw.ts).
@@ -595,6 +641,9 @@ export function setBubbleSize(size: 'S' | 'M' | 'L'): void {
 export function sendClickRipple(x: number, y: number): void {
   const rec = active;
   if (!rec || rec.status !== 'recording') return;
+  // The draw overlay sits above the full-face cover; ripples over the face
+  // would record as floating rings, so they pause while the layout is 'full'.
+  if (rec.cameraLayout === 'full') return;
   const draw = getDrawWindow();
   if (!draw) return;
   const bounds = draw.getBounds();

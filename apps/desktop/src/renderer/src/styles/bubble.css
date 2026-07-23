@@ -35,6 +35,27 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.28);
   box-sizing: border-box;
   -webkit-app-region: drag;
+  opacity: 1;
+  /* Layout flips fade through transparent while the window swaps bounds
+     (fadeBubbleToLayout keeps its timer in sync with this duration). */
+  transition: opacity 200ms var(--ol-ease);
+}
+
+.bubble.faded {
+  opacity: 0;
+}
+
+/* Full-face layout: the window covers the display, the circle becomes an
+   opaque cover-fit rectangle. Not draggable - it IS the frame. */
+.bubble.full {
+  border-radius: 0;
+  border: none;
+  background: #000;
+  -webkit-app-region: no-drag;
+}
+
+.bubble.full .bubble-controls {
+  display: none;
 }
 
 #bubble-video {

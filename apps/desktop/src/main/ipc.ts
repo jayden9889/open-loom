@@ -52,6 +52,9 @@ export function registerIpc(): void {
   handle('ol:restartRecording', () => recorder.restartRecording());
   handle('ol:getRecordingState', () => recorder.currentState());
   ipcMain.on('ol:toggleCamera', (_e, on: boolean) => recorder.toggleCamera(on));
+  ipcMain.on('ol:setCameraLayout', (_e, layout: unknown) => {
+    if (layout === 'bubble' || layout === 'full' || layout === 'off') recorder.setCameraLayout(layout);
+  });
   ipcMain.on('ol:toggleMic', (_e, on: boolean) => recorder.toggleMic(on));
   ipcMain.on('ol:toggleDraw', (_e, on: boolean) => recorder.toggleDraw(on));
   ipcMain.on('ol:setDrawColor', (_e, color: string) => recorder.setDrawColor(color));

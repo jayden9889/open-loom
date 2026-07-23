@@ -181,7 +181,9 @@ export function Hud() {
         hint={
           state.drawAvailable
             ? `Draw ${prettyAccel(shortcuts.draw)}`
-            : 'Draw needs full-screen capture'
+            : state.cameraLayout === 'full'
+              ? 'Draw is off in full-face view'
+              : 'Draw needs full-screen capture'
         }
         onHint={setHint}
         onClick={() => window.openloom.toggleDraw(!state.drawOn)}

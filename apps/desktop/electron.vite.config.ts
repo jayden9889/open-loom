@@ -45,6 +45,7 @@ export default defineConfig({
           hud: resolve(__dirname, 'src/renderer/hud.html'),
           bubble: resolve(__dirname, 'src/renderer/bubble.html'),
           countdown: resolve(__dirname, 'src/renderer/countdown.html'),
+          switcher: resolve(__dirname, 'src/renderer/switcher.html'),
           draw: resolve(__dirname, 'src/renderer/draw.html'),
           engine: resolve(__dirname, 'src/renderer/engine.html'),
         },

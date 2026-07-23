@@ -327,11 +327,6 @@ export function setBubbleVisible(visible: boolean): void {
   else bubbleWindow.hide();
 }
 
-/**
- * Grow the bubble window to cover the whole display so full-display capture
- * records the camera full-frame (the 'full' camera layout, SPEC R6). The
- * renderer switches to a rectangular opaque cover-fit via setBubbleLayout.
- */
 /** Restore the bubble window to its circular size, anchored bottom-left of the display. */
 export function positionBubbleCircle(display: Display, size: BubbleSize): void {
   if (!bubbleWindow || bubbleWindow.isDestroyed()) return;
@@ -343,6 +338,44 @@ export function positionBubbleCircle(display: Display, size: BubbleSize): void {
     width: diameter,
     height: diameter,
   });
+  bubbleWindow.setIgnoreMouseEvents(false);
+}
+
+/**
+ * Grow the bubble window to cover the whole display so full-display capture
+ * records the camera full-frame (the 'full' camera layout, SPEC R6). The
+ * renderer switches to a rectangular opaque cover-fit via setBubbleLayout.
+ * The cover ignores the mouse so the presenter is never trapped behind it;
+ * the HUD and layout switcher live one window level above and stay clickable.
+ */
+export function positionBubbleFull(display: Display): void {
+  if (!bubbleWindow || bubbleWindow.isDestroyed()) return;
+  bubbleWindow.setBounds(display.bounds);
+  bubbleWindow.setIgnoreMouseEvents(true);
+}
+
+/** Renderer-side fade duration for a bubble layout flip; keep in sync with bubble.css. */
+const BUBBLE_FADE_MS = 220;
+
+/**
+ * Animate a circle <-> full-frame flip: fade the bubble out, swap the window
+ * bounds while it is invisible, then let the set-layout message fade it back
+ * in with the new shape. The OS bounds change itself cannot animate, so the
+ * fade is what the recording (and the presenter) sees.
+ */
+export function fadeBubbleToLayout(
+  display: Display,
+  size: BubbleSize,
+  layout: Exclude<CameraLayout, 'off'>
+): void {
+  if (!bubbleWindow || bubbleWindow.isDestroyed()) return;
+  bubbleWindow.webContents.send('bubble:fade-out');
+  setTimeout(() => {
+    if (!bubbleWindow || bubbleWindow.isDestroyed()) return;
+    if (layout === 'full') positionBubbleFull(display);
+    else positionBubbleCircle(display, size);
+    setBubbleLayout(layout);
+  }, BUBBLE_FADE_MS);
 }
 
 /** Tell the bubble renderer to render as a circle, a full-frame cover, or hide. */
@@ -360,6 +393,51 @@ export function destroyBubble(): void {
 
 export function getBubbleWindow(): BrowserWindow | null {
   return bubbleWindow && !bubbleWindow.isDestroyed() ? bubbleWindow : null;
+}
+
+// ---------------------------------------------------------------------------
+// Camera layout switcher (bottom-center slider, Screen+Camera recordings)
+// ---------------------------------------------------------------------------
+
+let switcherWindow: BrowserWindow | null = null;
+
+export const SWITCHER_SIZE = { width: 300, height: 56 };
+
+/**
+ * Slim glass slider pinned bottom-center of the recorded display while a
+ * Screen+Camera recording runs: Full face <-> Face + screen. Excluded from
+ * capture so it never appears in the recording, and one window level above
+ * the other overlays so the full-frame camera cover can never bury it.
+ */
+export function showSwitcher(display: Display): BrowserWindow {
+  destroySwitcher();
+  const { workArea } = display;
+  switcherWindow = overlayBase(
+    {
+      x: workArea.x + Math.round((workArea.width - SWITCHER_SIZE.width) / 2),
+      y: workArea.y + workArea.height - SWITCHER_SIZE.height - 16,
+      width: SWITCHER_SIZE.width,
+      height: SWITCHER_SIZE.height,
+    },
+    true
+  );
+  switcherWindow.setAlwaysOnTop(true, 'screen-saver', 1);
+  excludeFromCapture(switcherWindow);
+  switcherWindow.once('ready-to-show', () => switcherWindow?.showInactive());
+  loadPage(switcherWindow, 'switcher');
+  switcherWindow.on('closed', () => {
+    switcherWindow = null;
+  });
+  return switcherWindow;
+}
+
+export function destroySwitcher(): void {
+  if (switcherWindow && !switcherWindow.isDestroyed()) switcherWindow.destroy();
+  switcherWindow = null;
+}
+
+export function getSwitcherWindow(): BrowserWindow | null {
+  return switcherWindow && !switcherWindow.isDestroyed() ? switcherWindow : null;
 }
 
 /** 3-2-1 countdown overlay covering the recorded display (SPEC R5). */

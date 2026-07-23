@@ -461,6 +461,7 @@ export interface OpenLoomAPI {
   clearDraw(): void;
   setBubbleSize(s: BubbleSize): void;
   /** Switch the live camera layout mid-recording (Screen+Camera only). */
+  setCameraLayout(layout: CameraLayout): void;
 
   // library
   listVideos(): Promise<VideoMeta[]>;
@@ -575,6 +576,8 @@ export interface OpenLoomInternal {
   onEngineSetBubble(cb: (b: { size: BubbleSize; mirror: boolean }) => void): () => void;
   /** Bubble window: switch between circular ('bubble'), full-frame ('full') and hidden ('off'). */
   onBubbleLayout(cb: (layout: CameraLayout) => void): () => void;
+  /** Bubble window: fade to transparent; the set-layout that follows fades back in. */
+  onBubbleFadeOut(cb: () => void): () => void;
   // countdown window
   countdownDone(): void;
   countdownCancel(): void;

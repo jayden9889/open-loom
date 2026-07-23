@@ -7,7 +7,7 @@
  */
 import type { CameraLayout, EngineBeginPayload } from '@shared/types';
 import { BUBBLE_SIZES } from '@shared/types';
-import { cameraDrawPlan } from './layout';
+import { cameraDrawPlan, coverFit } from './layout';
 import { attachHealthyCameraStream, getUserMediaResilient } from '../media';
 
 const internal = window.openloomInternal;
@@ -73,11 +73,32 @@ function createCompositor(
   canvas.height = Math.max(2, windowVideo.videoHeight);
   const ctx = canvas.getContext('2d')!;
   let layout: CameraLayout = initial.cameraOn ? 'bubble' : 'off';
+  // What sits under the full-face cover while it fades: the last bubble/off state.
+  let baseLayout: Exclude<CameraLayout, 'full'> = initial.cameraOn ? 'bubble' : 'off';
+  // 0 = screen (+bubble), 1 = full-face cover; steps toward the target each
+  // frame so layout flips crossfade instead of hard-cutting in the recording.
+  let fullAlpha = 0;
+  const FULL_FADE_MS = 250;
+  let lastFrameAt = performance.now();
   let bubbleSize = initial.size;
   let mirror = initial.mirror;
   let running = true;
 
   const frameMs = 1000 / fps;
+
+  function drawCameraFull(cam: HTMLVideoElement, alpha: number): void {
+    const rect = coverFit(cam.videoWidth, cam.videoHeight, 0, 0, canvas.width, canvas.height);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    if (mirror) {
+      ctx.translate(canvas.width, 0);
+      ctx.scale(-1, 1);
+    }
+    ctx.drawImage(cam, rect.dx, rect.dy, rect.dw, rect.dh);
+    ctx.restore();
+  }
 
   function drawFrame(): void {
     if (!running) return;
@@ -89,9 +110,17 @@ function createCompositor(
         canvas.height = windowVideo.videoHeight;
       }
     }
+    const now = performance.now();
+    const dt = now - lastFrameAt;
+    lastFrameAt = now;
     const camReady = !!(camVideo && camVideo.videoWidth > 0);
+    const targetFull = layout === 'full' && camReady ? 1 : 0;
+    if (fullAlpha !== targetFull) {
+      const step = dt / FULL_FADE_MS;
+      fullAlpha = targetFull > fullAlpha ? Math.min(1, fullAlpha + step) : Math.max(0, fullAlpha - step);
+    }
     const plan = cameraDrawPlan(
-      layout,
+      fullAlpha >= 1 ? 'off' : baseLayout,
       canvas.width,
       canvas.height,
       camReady,
@@ -100,60 +129,56 @@ function createCompositor(
       BUBBLE_SIZES[bubbleSize]
     );
 
-    if (plan.drawWindow) {
-      if (windowVideo.videoWidth > 0) ctx.drawImage(windowVideo, 0, 0, canvas.width, canvas.height);
-    } else {
-      // Full-camera layout hides the screen; clear first so no window frame bleeds through.
+    if (fullAlpha >= 1) {
+      // Fully in full-face: nothing of the screen should bleed through.
       ctx.fillStyle = '#000';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
+    } else if (windowVideo.videoWidth > 0) {
+      ctx.drawImage(windowVideo, 0, 0, canvas.width, canvas.height);
     }
 
-    if (plan.camera && camVideo) {
-      if (plan.camera.kind === 'full') {
-        const { rect } = plan.camera;
-        ctx.save();
-        if (mirror) {
-          ctx.translate(canvas.width, 0);
-          ctx.scale(-1, 1);
-        }
-        ctx.drawImage(camVideo, rect.dx, rect.dy, rect.dw, rect.dh);
-        ctx.restore();
-      } else {
-        const { box, rect } = plan.camera;
-        const { d, x, y } = box;
-        ctx.save();
-        ctx.beginPath();
-        ctx.arc(x + d / 2, y + d / 2, d / 2, 0, Math.PI * 2);
-        ctx.clip();
-        if (mirror) {
-          ctx.translate(x + d / 2, 0);
-          ctx.scale(-1, 1);
-          ctx.translate(-(x + d / 2), 0);
-        }
-        ctx.drawImage(camVideo, rect.dx, rect.dy, rect.dw, rect.dh);
-        ctx.restore();
-        // Hairline ring so the bubble reads against light content.
-        ctx.save();
-        ctx.beginPath();
-        ctx.arc(x + d / 2, y + d / 2, d / 2 - 1, 0, Math.PI * 2);
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = 'rgba(255,255,255,0.85)';
-        ctx.stroke();
-        ctx.restore();
+    if (plan.camera?.kind === 'bubble' && camVideo && fullAlpha < 1) {
+      const { box, rect } = plan.camera;
+      const { d, x, y } = box;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(x + d / 2, y + d / 2, d / 2, 0, Math.PI * 2);
+      ctx.clip();
+      if (mirror) {
+        ctx.translate(x + d / 2, 0);
+        ctx.scale(-1, 1);
+        ctx.translate(-(x + d / 2), 0);
       }
+      ctx.drawImage(camVideo, rect.dx, rect.dy, rect.dw, rect.dh);
+      ctx.restore();
+      // Hairline ring so the bubble reads against light content.
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(x + d / 2, y + d / 2, d / 2 - 1, 0, Math.PI * 2);
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+      ctx.stroke();
+      ctx.restore();
     }
+    // Full-face cover on top: its alpha ramps 0<->1, so the flip crossfades.
+    if (fullAlpha > 0 && camReady && camVideo) drawCameraFull(camVideo, fullAlpha);
     // setTimeout pump: requestAnimationFrame stalls for occluded/hidden windows.
     setTimeout(drawFrame, frameMs);
   }
   drawFrame();
 
+  function applyLayout(l: CameraLayout): void {
+    layout = l;
+    if (l !== 'full') baseLayout = l;
+  }
+
   return {
     stream: canvas.captureStream(fps),
     setCameraOn: (on) => {
-      layout = on ? 'bubble' : 'off';
+      applyLayout(on ? 'bubble' : 'off');
     },
     setCameraLayout: (l) => {
-      layout = l;
+      applyLayout(l);
     },
     setBubble: (size, m) => {
       bubbleSize = size;
