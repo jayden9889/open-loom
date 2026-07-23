@@ -187,7 +187,7 @@ export function watchRoutes(
       return c.json({ ok: true, note: 'This video is not password protected.' });
     }
     // Throttle guesses per IP+video; the window doubles as a lockout.
-    if (!limiters.unlock.allow(`${clientIp(c)}:${video.id}`)) {
+    if (!limiters.unlock.allow(`${clientIp(c, ctx.cfg.trustProxy)}:${video.id}`)) {
       return c.json({ error: 'Too many attempts. Try again later.' }, 429);
     }
     let body: Record<string, unknown>;

@@ -38,15 +38,25 @@ export class RateLimiter {
   }
 }
 
-/** Best-effort client IP: honour a reverse proxy's forwarding headers, else the socket. */
-export function clientIp(c: Context): string {
-  const fwd = c.req.header('x-forwarded-for');
-  if (fwd) {
-    const first = fwd.split(',')[0]?.trim();
-    if (first) return first;
+/**
+ * Client IP for rate-limit keys. The socket address is the source of truth; a
+ * forwarding header is honoured ONLY when `trustProxy` is set, because a
+ * directly-exposed server lets any client forge X-Forwarded-For and reset its
+ * own per-IP counters (defeating the password brute-force lockout). When
+ * trusted, the LAST hop is taken - the address the trusted proxy itself
+ * appended - not the client-controlled first entry.
+ */
+export function clientIp(c: Context, trustProxy = false): string {
+  if (trustProxy) {
+    const fwd = c.req.header('x-forwarded-for');
+    if (fwd) {
+      const parts = fwd.split(',').map((p) => p.trim()).filter(Boolean);
+      const last = parts[parts.length - 1];
+      if (last) return last;
+    }
+    const real = c.req.header('x-real-ip');
+    if (real && real.trim()) return real.trim();
   }
-  const real = c.req.header('x-real-ip');
-  if (real && real.trim()) return real.trim();
   try {
     const info = getConnInfo(c);
     if (info.remote.address) return info.remote.address;

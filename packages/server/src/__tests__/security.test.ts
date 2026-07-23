@@ -130,6 +130,30 @@ describe('viewer abuse hardening', () => {
     const good = await post(srv, `/v/${id2}/unlock`, { password: 'hunter2!' });
     expect(good.status).toBe(200);
   });
+
+  it('a spoofed X-Forwarded-For cannot bypass the unlock lockout when trustProxy is off (default)', async () => {
+    const srv = makeApp();
+    const id = await createVideo(srv, { id: 'spoofvid123' });
+    await srv.app.request(`/api/videos/${id}`, {
+      method: 'PATCH',
+      headers: authJson,
+      body: JSON.stringify({ privacy: 'password', password: 'sesame42' }),
+    });
+
+    // Every guess forges a fresh client IP. With trustProxy off the header is
+    // ignored, so all attempts share the socket bucket and the lockout still trips.
+    const statuses: number[] = [];
+    for (let i = 0; i < 9; i++) {
+      const res = await srv.app.request(`/v/${id}/unlock`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-forwarded-for': `10.0.0.${i}` },
+        body: JSON.stringify({ password: 'wrong' }),
+      });
+      statuses.push(res.status);
+    }
+    expect(statuses.slice(0, 8)).toEqual(Array(8).fill(403));
+    expect(statuses[8]).toBe(429);
+  });
 });
 
 describe('unlock cookie hardening', () => {

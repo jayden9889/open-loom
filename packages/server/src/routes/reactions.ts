@@ -49,7 +49,7 @@ export function reactionsRoutes(
     if (!video) return c.json({ error: 'Video not found.' }, 404);
     if (!isUnlocked(c, video)) return c.json({ error: 'This video is password protected.' }, 403);
     if (video.allow_reactions !== 1) return c.json({ error: 'Reactions are turned off for this video.' }, 403);
-    if (!limiters.reactions.allow(`${clientIp(c)}:${video.id}`)) {
+    if (!limiters.reactions.allow(`${clientIp(c, ctx.cfg.trustProxy)}:${video.id}`)) {
       return c.json({ error: 'You are reacting too fast. Wait a moment and try again.' }, 429);
     }
 

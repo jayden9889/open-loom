@@ -102,7 +102,12 @@ worth sending someone.
 3. **Set `BASE_URL` to the HTTPS domain**, not the container's bare port (see the Docker Compose
    command above). Every share link is built from `BASE_URL`, which is what makes the minted link
    `https://videos.example.com/v/...` instead of `http://localhost:3000/v/...`.
-4. **Confirm it.** `https://videos.example.com/healthz` should return `{"ok":true}`.
+4. **Set `TRUST_PROXY=true`** once Caddy (or nginx/Traefik) is in front. The server ignores
+   `X-Forwarded-For` by default, so without a proxy every visitor looks like `localhost` and a
+   client cannot forge the header to escape the per-IP rate limits (including the password
+   brute-force lockout). Behind a proxy, `TRUST_PROXY=true` makes the limits key on each visitor's
+   real IP again. Leave it unset for a directly-exposed server.
+5. **Confirm it.** `https://videos.example.com/healthz` should return `{"ok":true}`.
 
 nginx or Traefik work the same way if either is already running: terminate TLS at the proxy, forward
 to `localhost:3000`, and cap the request body size there instead.
@@ -123,6 +128,7 @@ All configuration is environment variables.
 | `BASE_URL` | `http://localhost:3000` | Public origin used to build share and watch URLs. Set this to your HTTPS domain |
 | `MAX_UPLOAD_MB` | `2048` | Reject uploads larger than this |
 | `CREATOR_NAME` | empty | Optional name shown on watch pages |
+| `TRUST_PROXY` | `false` | Trust `X-Forwarded-For`/`X-Real-IP` for the client IP behind a reverse proxy. Leave `false` when the server is exposed directly, or a client can spoof the header and bypass per-IP rate limits |
 
 Health check: `GET /healthz` returns 200 when the server is up.
 

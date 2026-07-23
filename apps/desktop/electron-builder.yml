@@ -13,6 +13,15 @@ directories:
 files:
   - out/**
   - package.json
+  # Native-module build intermediates (.o/.a and gyp obj dirs) never ship:
+  # they are useless at runtime and leak the build machine's paths.
+  - "!**/node_modules/**/build/Release/obj.target/**"
+  - "!**/node_modules/**/*.o"
+  - "!**/node_modules/**/*.a"
+
+# Locally-compiled .node addons embed this machine's absolute build paths in
+# their symbol tables; strip them so no local path ships in a public artifact.
+afterPack: build-hooks/strip-native.mjs
 
 # App icons and tray templates ship as loose resources so the main process can
 # read them at runtime (see tray.ts). Kept out of the asar for direct fs access.

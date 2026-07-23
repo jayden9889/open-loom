@@ -37,7 +37,7 @@ export function beaconRoutes(
     const video = getVideo(ctx.db, c.req.param('id'));
     if (!video) return c.json({ error: 'Video not found.' }, 404);
     if (!isUnlocked(c, video)) return c.json({ error: 'This video is password protected.' }, 403);
-    const ip = clientIp(c);
+    const ip = clientIp(c, ctx.cfg.trustProxy);
     if (!limiters.beacon.allow(`${ip}:${video.id}`)) {
       return c.json({ error: 'Too many beacons. Slow down.' }, 429);
     }

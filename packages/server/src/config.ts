@@ -17,6 +17,18 @@ export interface ServerConfig {
   maxUploadBytes: number;
   /** Optional display name shown as the creator on watch pages. */
   creatorName: string;
+  /**
+   * Trust X-Forwarded-For / X-Real-IP for the client IP. OFF by default: only
+   * enable when the server actually sits behind a reverse proxy that sets them,
+   * otherwise a client can spoof the header and defeat per-IP rate limits
+   * (including the password brute-force lockout).
+   */
+  trustProxy: boolean;
+}
+
+function boolEnv(value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined) return fallback;
+  return /^(1|true|yes|on)$/i.test(value.trim());
 }
 
 function intEnv(value: string | undefined, fallback: number): number {
@@ -46,6 +58,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const baseUrl = (env.BASE_URL || `http://localhost:${port}`).replace(/\/+$/, '');
   const maxUploadBytes = intEnv(env.MAX_UPLOAD_MB, 2048) * 1024 * 1024;
   const creatorName = (env.CREATOR_NAME || '').trim();
+  const trustProxy = boolEnv(env.TRUST_PROXY, false);
 
-  return { port, dataDir, apiKey, apiKeyGenerated, baseUrl, maxUploadBytes, creatorName };
+  return { port, dataDir, apiKey, apiKeyGenerated, baseUrl, maxUploadBytes, creatorName, trustProxy };
 }
