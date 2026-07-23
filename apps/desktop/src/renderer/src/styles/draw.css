@@ -16,3 +16,24 @@ body {
 body.drawing #draw-canvas {
   cursor: crosshair;
 }
+
+/* Draw-mode indicator: pen-colour dot riding just under the pointer.
+   Visible only while drawing AND once a real cursor position is known. */
+#draw-dot {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 10px;
+  height: 10px;
+  margin: 12px 0 0 -5px;
+  border-radius: 50%;
+  background: #ff453a;
+  border: 1.5px solid rgba(255, 255, 255, 0.9);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+body.drawing #draw-dot.placed {
+  opacity: 1;
+}

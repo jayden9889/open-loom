@@ -174,9 +174,9 @@ function closeSessionWindows(): void {
 
 export async function startRecording(opts: RecordingOptions): Promise<void> {
   if (active) throw new Error('A recording is already in progress.');
-  if (!ffmpeg.ffmpegAvailable()) {
-    throw new Error('ffmpeg is required to save recordings. Install it from the Setup screen first.');
-  }
+  // ffmpeg is fetched automatically (prefetched at launch; awaited here as the
+  // backstop) - never a user-facing wall. Throws only if the download fails.
+  await ffmpeg.ensureFfmpeg('record');
   if (opts.mode !== 'cam' && !opts.sourceId) {
     throw new Error('Pick a screen or window to record first.');
   }

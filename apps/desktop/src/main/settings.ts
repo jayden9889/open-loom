@@ -6,6 +6,7 @@ import { app, safeStorage } from 'electron';
 import Store from 'electron-store';
 import path from 'node:path';
 import type { Settings } from '@shared/types';
+import { DEFAULT_SHORTCUTS, LEGACY_DRAW_SHORTCUT } from '@shared/types';
 import {
   defaultSettings,
   mergeSettings,
@@ -52,6 +53,16 @@ function getStore(): Store<{ settings: Settings }> {
       name: 'openloom-settings',
       defaults: { settings: defaultSettings(defaultSaveDir()) },
     });
+    // The draw shortcut default moved to Control+1; a stored copy of the old
+    // default is indistinguishable from "never customised", so migrate it.
+    const stored = store.get('settings');
+    if (stored?.shortcuts?.draw === LEGACY_DRAW_SHORTCUT) {
+      store.set('settings', {
+        ...stored,
+        shortcuts: { ...stored.shortcuts, draw: DEFAULT_SHORTCUTS.draw },
+      });
+      log.info('migrated draw shortcut to Control+1');
+    }
   }
   return store;
 }

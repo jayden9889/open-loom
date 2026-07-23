@@ -5,6 +5,7 @@
  */
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 export interface FfmpegBinaries {
@@ -33,8 +34,23 @@ function isExecutable(file: string): boolean {
   }
 }
 
-function findInPath(name: string): string | null {
-  const dirs = (process.env.PATH ?? '').split(path.delimiter).filter(Boolean);
+/**
+ * Install dirs a Finder/Dock-launched app never sees: GUI processes inherit a
+ * minimal PATH (no shell profile), so a Homebrew/pipx/MacPorts ffmpeg that
+ * `which ffmpeg` finds in a terminal is invisible here without this list.
+ */
+function wellKnownDirs(): string[] {
+  if (process.platform === 'win32') return [];
+  return [
+    path.join(os.homedir(), '.local', 'bin'),
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+    '/opt/local/bin',
+  ];
+}
+
+function findInPath(name: string, extraDirs: string[]): string | null {
+  const dirs = [...(process.env.PATH ?? '').split(path.delimiter).filter(Boolean), ...extraDirs];
   for (const dir of dirs) {
     const candidate = path.join(dir, name + exeSuffix);
     if (isExecutable(candidate)) return candidate;
@@ -44,9 +60,15 @@ function findInPath(name: string): string | null {
 
 /**
  * Resolve ffmpeg + ffprobe. `configuredFfmpegPath` (Settings.ffmpegPath) wins;
- * its sibling ffprobe is preferred. Returns null when either binary is missing.
+ * its sibling ffprobe is preferred. PATH is searched next (plus `extraDirs`,
+ * defaulting to the well-known install dirs), then the app bin dir. Returns
+ * null when either binary is missing.
  */
-export function resolveBinaries(configuredFfmpegPath: string, appBinDir: string): FfmpegBinaries | null {
+export function resolveBinaries(
+  configuredFfmpegPath: string,
+  appBinDir: string,
+  extraDirs: string[] = wellKnownDirs()
+): FfmpegBinaries | null {
   const candidates: { ffmpeg: string; ffprobe: string }[] = [];
 
   if (configuredFfmpegPath) {
@@ -57,8 +79,8 @@ export function resolveBinaries(configuredFfmpegPath: string, appBinDir: string)
     });
   }
 
-  const pathFfmpeg = findInPath('ffmpeg');
-  const pathFfprobe = findInPath('ffprobe');
+  const pathFfmpeg = findInPath('ffmpeg', extraDirs);
+  const pathFfprobe = findInPath('ffprobe', extraDirs);
   if (pathFfmpeg && pathFfprobe) candidates.push({ ffmpeg: pathFfmpeg, ffprobe: pathFfprobe });
 
   candidates.push({

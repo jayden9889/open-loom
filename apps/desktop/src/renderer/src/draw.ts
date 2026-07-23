@@ -40,6 +40,18 @@ let penColor = PEN_COLORS['red']!;
 const canvas = document.getElementById('draw-canvas') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
 
+// Mode indicator: a small dot in the pen colour rides just under the cursor
+// while draw mode is on, so the presenter always knows the pen is live. It
+// stays hidden until the first pointer position arrives (no stale corner dot).
+const dot = document.createElement('div');
+dot.id = 'draw-dot';
+document.body.appendChild(dot);
+
+function placeDot(x: number, y: number): void {
+  dot.style.transform = `translate(${x}px, ${y}px)`;
+  dot.classList.add('placed');
+}
+
 let strokes: Stroke[] = [];
 let ripples: Ripple[] = [];
 let current: Stroke | null = null;
@@ -123,7 +135,8 @@ canvas.addEventListener('pointerdown', (e) => {
   schedule();
 });
 
-canvas.addEventListener('pointermove', (e) => {
+window.addEventListener('pointermove', (e) => {
+  if (drawEnabled) placeDot(e.clientX, e.clientY);
   if (!current) return;
   current.points.push({ x: e.clientX, y: e.clientY });
   schedule();
@@ -150,6 +163,9 @@ window.openloomInternal.onDrawEnable((on) => {
   drawEnabled = on;
   document.body.classList.toggle('drawing', on);
   if (on) {
+    // Fresh entry: the dot appears at the first cursor position, not wherever
+    // it was left last time.
+    dot.classList.remove('placed');
     // Re-entering draw mode rescues ink that was mid-fade.
     inkFadeStart = null;
     schedule();
@@ -165,6 +181,7 @@ window.openloomInternal.onDrawEnable((on) => {
 
 window.openloomInternal.onDrawColor((color) => {
   penColor = PEN_COLORS[color] ?? PEN_COLORS['red']!;
+  dot.style.background = penColor;
 });
 
 window.openloomInternal.onDrawClear(() => clearAll());

@@ -30,6 +30,10 @@ extraResources:
     to: assets
     filter:
       - "**/*"
+  # The ffmpeg fetcher runs as a plain Node script (ELECTRON_RUN_AS_NODE), so
+  # it must live on disk outside the asar for the packaged app to spawn it.
+  - from: ../../scripts/fetch-ffmpeg.mjs
+    to: scripts/fetch-ffmpeg.mjs
 
 # Optional native input hook for click highlights (SPEC R11); the app runs
 # fine without it, so never fail the build when it is absent.

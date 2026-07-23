@@ -172,8 +172,11 @@ export const DEFAULT_SHORTCUTS: ShortcutSettings = {
   pauseResume: 'Alt+Shift+P',
   cancel: 'Alt+Shift+C',
   restart: 'CommandOrControl+Shift+R',
-  draw: 'CommandOrControl+Shift+D',
+  draw: 'Control+1',
 };
+
+/** Pre-2026-07-23 draw default; stored settings carrying it migrate to Control+1. */
+export const LEGACY_DRAW_SHORTCUT = 'CommandOrControl+Shift+D';
 
 export type TranscriptionEngine = 'whisper' | 'openai' | 'off';
 export type AiProvider = 'anthropic' | 'openai' | 'ollama' | 'off';

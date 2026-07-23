@@ -40,7 +40,9 @@ describe('resolveBinaries', () => {
     const old = process.env.PATH;
     process.env.PATH = '/definitely/not/a/dir';
     try {
-      expect(resolveBinaries('', path.join(os.tmpdir(), 'nope'))).toBeNull();
+      // Empty extraDirs: the well-known install dirs would find a real ffmpeg
+      // on a dev machine and defeat the negative case.
+      expect(resolveBinaries('', path.join(os.tmpdir(), 'nope'), [])).toBeNull();
     } finally {
       process.env.PATH = old;
     }

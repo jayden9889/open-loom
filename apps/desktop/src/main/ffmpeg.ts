@@ -34,6 +34,39 @@ export function ffmpegAvailable(): boolean {
   return binaries() !== null;
 }
 
+/**
+ * Make sure ffmpeg exists, fetching it automatically when missing - the user
+ * should never hit an "install ffmpeg" wall. Called in the background at app
+ * launch and as an awaited backstop when a recording starts. The Setup screen
+ * stays as the manual fallback (custom path / retry with visible log).
+ */
+export async function ensureFfmpeg(context: 'launch' | 'record' = 'record'): Promise<void> {
+  if (ffmpegAvailable()) return;
+  log.info(`ffmpeg missing (${context}); starting automatic download`);
+  if (context === 'record') {
+    broadcast('ol:toast', {
+      kind: 'info',
+      text: 'One-time setup: downloading the video engine. Recording starts as soon as it lands.',
+    });
+  }
+  try {
+    await fetchFfmpeg((line) => broadcast('ol:setup-log', line));
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Could not set up the video engine automatically (${msg}). Open Setup to retry or point Settings at an existing ffmpeg.`
+    );
+  }
+  if (!ffmpegAvailable()) {
+    throw new Error(
+      'The video engine downloaded but could not be found. Open Setup to retry or point Settings at an existing ffmpeg.'
+    );
+  }
+  if (context === 'record') {
+    broadcast('ol:toast', { kind: 'success', text: 'Video engine ready.' });
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Serial job queue with progress broadcast
 // ---------------------------------------------------------------------------
@@ -97,10 +130,15 @@ export function fetchFfmpeg(onLine: (line: string) => void): Promise<void> {
     onLine('A download is already running.');
     return fetching;
   }
-  const script = path.resolve(app.getAppPath(), '../../scripts/fetch-ffmpeg.mjs');
-  const fallback = path.resolve(app.getAppPath(), 'scripts/fetch-ffmpeg.mjs');
-  const scriptPath = fs.existsSync(script) ? script : fallback;
-  if (!fs.existsSync(scriptPath)) {
+  // Packaged: the script ships as an extraResource next to the asar. Dev: it
+  // lives at the repo root (two levels above apps/desktop).
+  const candidates = [
+    path.join(process.resourcesPath ?? '', 'scripts/fetch-ffmpeg.mjs'),
+    path.resolve(app.getAppPath(), '../../scripts/fetch-ffmpeg.mjs'),
+    path.resolve(app.getAppPath(), 'scripts/fetch-ffmpeg.mjs'),
+  ];
+  const scriptPath = candidates.find((p) => p && fs.existsSync(p));
+  if (!scriptPath) {
     return Promise.reject(
       new Error(
         'The ffmpeg download script is missing from this install. Install ffmpeg manually and add it to your PATH, or set its path in Settings.'

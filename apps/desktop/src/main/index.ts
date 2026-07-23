@@ -11,6 +11,7 @@ import { registerIpc } from './ipc';
 import { registerEngineIpc, isRecordingActive } from './recorder-ipc';
 import { createMainWindow, showLauncher } from './windows';
 import { getSettings } from './settings';
+import { ensureFfmpeg } from './ffmpeg';
 import { installShortcuts, unregisterAllShortcuts } from './shortcuts';
 import { installTray } from './tray';
 import { installClickHighlights, shutdownClickHighlights } from './clicks';
@@ -45,6 +46,9 @@ if (!gotLock) {
     installShortcuts();
     installTray();
     installClickHighlights();
+    // Silent onboarding: fetch ffmpeg in the background when it is missing so
+    // the first recording never hits an install wall.
+    void ensureFfmpeg('launch').catch((err) => log.warn(`ffmpeg prefetch failed: ${String(err)}`));
     log.info(`Open Loom ready (v${app.getVersion()}, ${process.platform} ${process.getSystemVersion?.() ?? ''})`);
     void runTestHooks();
   });
