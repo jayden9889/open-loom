@@ -21,6 +21,8 @@ export interface ProbeResult {
   sizeBytes: number;
   videoCodec: string;
   audioCodec: string | null;
+  /** Audio stream duration, when the container reports one. Null without audio. */
+  audioDurationSec: number | null;
 }
 
 const exeSuffix = process.platform === 'win32' ? '.exe' : '';
@@ -174,6 +176,7 @@ export async function probe(bins: FfmpegBinaries, file: string): Promise<ProbeRe
   const audio = data.streams?.find((s) => s.codec_type === 'audio');
   const durationSec =
     Number(data.format?.duration) || Number(video?.duration) || 0;
+  const audioDurationSec = Number(audio?.duration);
   return {
     durationSec: Number.isFinite(durationSec) ? Math.round(durationSec * 1000) / 1000 : 0,
     width: video?.width ?? 0,
@@ -182,6 +185,7 @@ export async function probe(bins: FfmpegBinaries, file: string): Promise<ProbeRe
     sizeBytes: Number(data.format?.size) || (fs.existsSync(file) ? fs.statSync(file).size : 0),
     videoCodec: video?.codec_name ?? '',
     audioCodec: audio?.codec_name ?? null,
+    audioDurationSec: audio && Number.isFinite(audioDurationSec) ? Math.round(audioDurationSec * 1000) / 1000 : null,
   };
 }
 

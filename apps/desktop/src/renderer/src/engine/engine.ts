@@ -265,7 +265,6 @@ async function buildSession(p: EngineBeginPayload): Promise<{
     if (!vt) throw new Error('The camera did not provide a video stream.');
     videoTrack = vt;
     micTrack = camStream.getAudioTracks()[0] ?? null;
-    if (micTrack) audioTracks.push(micTrack);
   } else {
     // Screen or window capture; the main process injects the picked source
     // (and loopback system audio when requested) via setDisplayMediaRequestHandler.
@@ -310,8 +309,6 @@ async function buildSession(p: EngineBeginPayload): Promise<{
       if (mixed) audioTracks.push(mixed);
     } else if (systemTrack) {
       audioTracks.push(systemTrack);
-    } else if (micTrack) {
-      audioTracks.push(micTrack);
     }
 
     if (opts.mode === 'screen-cam' && !opts.sourceIsDisplay) {
@@ -349,8 +346,72 @@ async function buildSession(p: EngineBeginPayload): Promise<{
     }
   }
 
+  // A raw mic track fed straight to MediaRecorder desyncs over time: when the
+  // capture drops samples (Bluetooth mic hiccup, device stall) the muxer packs
+  // the remaining audio back-to-back, so every lost span pulls the rest of the
+  // audio earlier than the video - cumulative lip-sync drift. Clocking the mic
+  // through an AudioContext turns capture gaps into silence on an unbroken
+  // timeline instead. The mixed mic+system path above already does this.
+  if (micTrack && !micGain) {
+    try {
+      audioCtx = audioCtx ?? new AudioContext();
+      const dest = audioCtx.createMediaStreamDestination();
+      const micSource = audioCtx.createMediaStreamSource(new MediaStream([micTrack]));
+      micGain = audioCtx.createGain();
+      micGain.gain.value = 1;
+      micSource.connect(micGain);
+      micGain.connect(dest);
+      const clocked = dest.stream.getAudioTracks()[0];
+      audioTracks.push(clocked ?? micTrack);
+    } catch {
+      audioTracks.push(micTrack);
+    }
+  }
+
   const recordStream = new MediaStream([videoTrack, ...audioTracks]);
   return { recordStream, allStreams, audioCtx, micGain, micTrack, compositor };
+}
+
+/**
+ * Hold the start until the audio pipeline is actually delivering. A Bluetooth
+ * mic (AirPods) engages its hands-free profile only when capture begins - the
+ * switch stalls both the capture track and the WebAudio render clock for
+ * 0.5-1.2s. Start the recorder inside that window and the muxer stamps the
+ * first (late) audio at t=0, so the whole take's audio plays early by exactly
+ * the stall (verified frame-by-frame, 2026-07-24). Waiting for a moving
+ * context clock and an unmuted mic track starts audio and video on the same
+ * timeline. Bounded: a take must never hang on a broken audio device.
+ */
+async function waitForLiveAudio(built: {
+  recordStream: MediaStream;
+  audioCtx: AudioContext | null;
+  micTrack: MediaStreamTrack | null;
+}): Promise<void> {
+  if (built.recordStream.getAudioTracks().length === 0) return;
+  const deadline = performance.now() + 4000;
+  const ctx = built.audioCtx;
+  if (ctx) {
+    try {
+      await ctx.resume();
+    } catch {
+      /* keep waiting on the clock below */
+    }
+    let last = ctx.currentTime;
+    let advances = 0;
+    // Two consecutive advancing reads = the render clock is genuinely running,
+    // not one buffered tick flushed after a stall.
+    while (performance.now() < deadline && advances < 2) {
+      await new Promise((r) => setTimeout(r, 100));
+      const now = ctx.currentTime;
+      advances = now > last ? advances + 1 : 0;
+      last = now;
+    }
+  }
+  // A capture track that is not delivering frames reports muted=true; the
+  // unmute is the "mic is actually live" signal.
+  while (performance.now() < deadline && built.micTrack?.muted) {
+    await new Promise((r) => setTimeout(r, 100));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -407,6 +468,11 @@ internal.onEngineBegin((payload) => {
       // A cancel/restart arrived while buildSession was awaiting permission /
       // getDisplayMedia: abort now instead of starting a recorder (and leaving
       // the capture streams live) for a session the user already cancelled.
+      if (myToken !== beginToken) {
+        stopBuilt(built);
+        return;
+      }
+      await waitForLiveAudio(built);
       if (myToken !== beginToken) {
         stopBuilt(built);
         return;

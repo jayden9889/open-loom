@@ -84,6 +84,9 @@ let active: ActiveRecording | null = null;
 let tickTimer: NodeJS.Timeout | null = null;
 let lastState: RecordingState = { status: 'idle', elapsedSec: 0 };
 
+/** Healthy takes land within ~25ms; sample-drop drift lands in the 100s of ms. */
+const AV_SYNC_TOLERANCE_SEC = 0.3;
+
 function tmpRoot(): string {
   return path.join(app.getPath('userData'), 'recordings-tmp');
 }
@@ -785,6 +788,21 @@ export async function processCaptureFile(input: {
   // video.mp4 exists and is valid from here on. Probing it for exact dimensions
   // is best-effort too: fall back to what we know rather than losing the video.
   const info = await ffmpeg.probe(bins, finalPath).catch(() => null);
+
+  // Sync guard: a healthy take muxes audio and video to within a few ms. A
+  // materially shorter audio track means the capture dropped samples and the
+  // take WILL play out of lip-sync - tell the user now, while re-recording
+  // costs a minute, not after the link is with a client.
+  if (info?.audioDurationSec != null && info.durationSec > 0) {
+    const driftSec = info.durationSec - info.audioDurationSec;
+    if (Math.abs(driftSec) > AV_SYNC_TOLERANCE_SEC) {
+      log.warn(`${videoId}: audio/video duration mismatch ${driftSec.toFixed(2)}s - take is likely out of sync`);
+      broadcast('ol:toast', {
+        kind: 'error',
+        text: `Audio and video drifted ${Math.abs(driftSec).toFixed(1)}s apart in this take - it will play out of sync. Best to re-record.`,
+      });
+    }
+  }
   emitState({ status: 'processing', processingNote: 'Creating preview' });
 
   const previewDuration = info?.durationSec ?? expectedDuration;
