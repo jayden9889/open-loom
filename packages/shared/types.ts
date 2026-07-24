@@ -113,11 +113,17 @@ export interface VideoMeta {
     password?: string;
   };
   /**
-   * Canonical youtube.com/watch?v=<id> link captured by the guided
-   * "Publish to YouTube (unlisted)" helper (SPEC S7). Set once the user pastes
-   * back the link after a manual upload; this is not an automated share provider.
+   * Canonical youtube.com/watch?v=<id> link from the "Publish to YouTube"
+   * uploader (SPEC S7), set once the Data API videos.insert upload succeeds.
    */
   youtubeUrl?: string;
+  /**
+   * Privacy YouTube actually applied to the upload. 'unlisted' once the API
+   * project is audited; 'private' while it is not - the forced-private lock on
+   * unaudited projects (docs/DECISIONS.md). 'private' is what makes the Watch
+   * view show the one-click "Set to Unlisted" flip button.
+   */
+  youtubePrivacy?: 'unlisted' | 'private';
   transcript?: { language: string; engine: string };
   ai?: {
     title?: string;
@@ -281,6 +287,14 @@ export interface Settings {
       allowReactions: boolean;
       allowDownload: boolean;
     };
+  };
+  youtube: {
+    /** OAuth 2.0 "Desktop app" client id from Google Cloud Console. Not secret. */
+    clientId: string;
+    /** OAuth 2.0 "Desktop app" client secret. Stored encrypted (safeStorage); read back masked. */
+    clientSecret: string;
+    /** Long-lived refresh token from the loopback consent. Stored encrypted; read back masked. Empty = not connected. */
+    refreshToken: string;
   };
 }
 
@@ -502,13 +516,21 @@ export interface OpenLoomAPI {
   /** Delete a viewer comment on the share server via the creator key (additive; see docs/DECISIONS.md). */
   deleteShareComment(videoId: string, commentId: string): Promise<void>;
 
-  // publish to YouTube (guided manual, unlisted; additive to SPEC section 5, see docs/DECISIONS.md)
-  /** Reveal the MP4, open youtube.com/upload, and copy the AI title if present. */
-  youtubePublishStart(videoId: string): Promise<{ titleCopied: boolean }>;
-  /** Validate + persist a pasted YouTube link; rejects non-YouTube input. */
-  youtubeSaveLink(videoId: string, url: string): Promise<VideoMeta>;
-  /** Canonical YouTube watch URL from the clipboard, or null (prefills the paste-back field). */
-  youtubeReadClipboardLink(): Promise<string | null>;
+  // publish to YouTube (Data API upload, unlisted; additive to SPEC section 5, see docs/DECISIONS.md)
+  /** Whether a YouTube account is connected (a refresh token is stored). */
+  youtubeStatus(): Promise<{ connected: boolean }>;
+  /** Run the Google OAuth loopback consent and store the refresh token. Returns the new connection state. */
+  youtubeConnect(): Promise<{ connected: boolean }>;
+  /** Forget the stored YouTube tokens (does not revoke server-side). */
+  youtubeDisconnect(): Promise<{ connected: boolean }>;
+  /**
+   * Upload the video's final MP4 via videos.insert requesting unlisted, persist the
+   * watch link and return it. `privacy` is what YouTube actually applied: 'private'
+   * while the API project is unaudited (caller shows the flip-to-unlisted step).
+   */
+  youtubePublish(videoId: string): Promise<{ url: string; videoId: string; privacy: 'unlisted' | 'private' }>;
+  /** Open the studio.youtube.com edit page for this recording's upload so the user can flip it to Unlisted. */
+  youtubeOpenStudioEdit(videoId: string): void;
 
   // settings & system
   getSettings(): Promise<Settings>;

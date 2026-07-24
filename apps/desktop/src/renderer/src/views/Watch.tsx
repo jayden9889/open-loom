@@ -7,7 +7,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Folder, Settings, VideoMeta } from '@shared/types';
 import { Icon } from '../components/icons';
-import { cleanIpcError, formatBytes, formatDate, formatDuration, useToasts } from '../components/ui';
+import {
+  cleanIpcError,
+  ContextMenu,
+  formatBytes,
+  formatDate,
+  formatDuration,
+  useToasts,
+  type MenuItem,
+} from '../components/ui';
 import { ShareDialog } from '../components/share/ShareDialog';
 import { ActivityPanel } from '../components/share/ActivityPanel';
 
@@ -76,6 +84,7 @@ export function WatchView({
   onChanged,
   onDeleted,
   onOpenSharingSettings,
+  onOpenYouTubeSettings,
 }: {
   id: string;
   /** True when this view opened straight off a finished recording (auto-expands the YouTube publish panel). */
@@ -87,6 +96,7 @@ export function WatchView({
   onChanged: () => Promise<void>;
   onDeleted: () => void;
   onOpenSharingSettings: () => void;
+  onOpenYouTubeSettings: () => void;
 }) {
   const { push } = useToasts();
   const [meta, setMeta] = useState<VideoMeta | null>(null);
@@ -109,6 +119,7 @@ export function WatchView({
   const [titleDraft, setTitleDraft] = useState<string | null>(null);
   const [descDraft, setDescDraft] = useState<string | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
+  const [moreMenu, setMoreMenu] = useState<{ x: number; y: number } | null>(null);
   const [transcriptQuery, setTranscriptQuery] = useState('');
   const [refresh, setRefresh] = useState(0);
   const [runningJob, setRunningJob] = useState<{ kind: string; pct: number; note?: string } | null>(null);
@@ -116,7 +127,8 @@ export function WatchView({
   const [taskDraft, setTaskDraft] = useState<{ index: number; text: string } | null>(null);
   const [summaryDraft, setSummaryDraft] = useState<string | null>(null);
   const [youtubeOpen, setYoutubeOpen] = useState(false);
-  const [youtubeDraft, setYoutubeDraft] = useState('');
+  const [youtubeConnected, setYoutubeConnected] = useState<boolean | null>(null);
+  const [youtubePublishing, setYoutubePublishing] = useState(false);
   const [youtubeError, setYoutubeError] = useState<string | null>(null);
 
   // A recording that just landed opens straight into the publish flow: the
@@ -125,20 +137,18 @@ export function WatchView({
     if (freshRecording) setYoutubeOpen(true);
   }, [freshRecording, id]);
 
-  // Mid-publish, returning from the browser with the watch link copied
-  // prefills the paste-back field, so saving is a single click.
+  // Reflect whether a YouTube account is connected whenever the panel is shown
+  // (and on window focus, so returning from the Settings consent updates it).
   useEffect(() => {
     if (!youtubeOpen || meta?.youtubeUrl) return;
-    const onFocus = () => {
-      void window.openloom.youtubeReadClipboardLink().then(
-        (url) => {
-          if (url) setYoutubeDraft((cur) => (cur.trim() ? cur : url));
-        },
+    const refreshStatus = () =>
+      void window.openloom.youtubeStatus().then(
+        (s) => setYoutubeConnected(s.connected),
         () => undefined
       );
-    };
-    window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
+    refreshStatus();
+    window.addEventListener('focus', refreshStatus);
+    return () => window.removeEventListener('focus', refreshStatus);
   }, [youtubeOpen, meta?.youtubeUrl]);
 
   const videoUrl = `${window.openloom.fileUrl(id, 'video.mp4')}?v=${refresh}`;
@@ -215,36 +225,35 @@ export function WatchView({
     );
   };
 
-  // Guided "Publish to YouTube (unlisted)": main reveals the MP4 in Finder and
-  // opens youtube.com/upload; the AI title (if any) is copied for pasting.
+  // "Publish to YouTube (unlisted)": upload the final MP4 through the Data API
+  // and hand back the watch link. An unaudited API project lands the video as
+  // private (privacy === 'private'); the panel then offers the one-click flip.
   const startYouTubePublish = () => {
     setTab('details');
     setYoutubeOpen(true);
     setYoutubeError(null);
-    void window.openloom.youtubePublishStart(id).then(
+    setYoutubePublishing(true);
+    void window.openloom.youtubePublish(id).then(
       (res) => {
-        if (res.titleCopied) {
-          push('info', 'Your AI title is on the clipboard, ready to paste into the YouTube title field.');
+        setYoutubePublishing(false);
+        window.openloom.copyToClipboard(res.url);
+        if (res.privacy === 'unlisted') {
+          push('success', 'Published to YouTube as unlisted. Link copied.');
+        } else {
+          push('info', 'Uploaded to YouTube. It is private for now - use "Set to Unlisted" so your link works.');
         }
+        void window.openloom.getVideo(id).then(setMeta, () => undefined);
+        void onChanged();
       },
-      (err) => push('error', cleanIpcError(err))
+      (err) => {
+        setYoutubePublishing(false);
+        setYoutubeError(cleanIpcError(err));
+      }
     );
   };
 
-  const saveYouTubeLink = () => {
-    setYoutubeError(null);
-    void window.openloom.youtubeSaveLink(id, youtubeDraft).then(
-      (m) => {
-        setMeta(m);
-        setYoutubeDraft('');
-        if (m.youtubeUrl) {
-          window.openloom.copyToClipboard(m.youtubeUrl);
-          push('success', 'YouTube link saved and copied.');
-        }
-        void onChanged();
-      },
-      (err) => setYoutubeError(cleanIpcError(err))
-    );
+  const openStudioFlip = () => {
+    window.openloom.youtubeOpenStudioEdit(id);
   };
 
   // Load captions when present (transcription module writes transcript.vtt).
@@ -396,34 +405,55 @@ export function WatchView({
           </button>
         )}
         <div className="watch-head-actions">
-          <button type="button" className="btn-secondary" onClick={onEdit} title="Trim, cut and stitch">
-            <Icon.Scissors width={15} height={15} />
-            Edit
-          </button>
           <button
             type="button"
-            className="btn-secondary"
-            onClick={() => window.openloom.revealVideo(id)}
-            title="Show the MP4 file"
-          >
-            <Icon.Reveal width={15} height={15} />
-            {navigator.platform.toLowerCase().includes('mac') ? 'Reveal in Finder' : 'Show in folder'}
-          </button>
-          <button
-            type="button"
-            className="btn-secondary"
+            className="btn-primary"
             onClick={startYouTubePublish}
             title="Publish this recording to YouTube as unlisted"
           >
             <Icon.Play width={15} height={15} />
             Publish to YouTube
           </button>
-          <button type="button" className="btn-primary" onClick={() => setShareOpen(true)}>
-            <Icon.Link width={15} height={15} />
-            {meta.share ? 'Share settings' : 'Share'}
+          <button
+            type="button"
+            className="btn-secondary btn-icon"
+            aria-label="More actions"
+            title="More actions"
+            onClick={(e) => {
+              const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+              setMoreMenu({ x: r.right, y: r.bottom + 4 });
+            }}
+          >
+            <Icon.More width={16} height={16} />
           </button>
         </div>
       </header>
+      {moreMenu && (
+        <ContextMenu
+          x={moreMenu.x}
+          y={moreMenu.y}
+          onClose={() => setMoreMenu(null)}
+          items={
+            [
+              {
+                label: 'Edit',
+                icon: <Icon.Scissors width={15} height={15} />,
+                onClick: onEdit,
+              },
+              {
+                label: meta.share ? 'Share settings' : 'Share',
+                icon: <Icon.Link width={15} height={15} />,
+                onClick: () => setShareOpen(true),
+              },
+              {
+                label: navigator.platform.toLowerCase().includes('mac') ? 'Reveal in Finder' : 'Show in folder',
+                icon: <Icon.Reveal width={15} height={15} />,
+                onClick: () => window.openloom.revealVideo(id),
+              },
+            ] satisfies MenuItem[]
+          }
+        />
+      )}
 
       <div className="watch-body">
         <div className="watch-player-col">
@@ -727,7 +757,11 @@ export function WatchView({
 
                   {meta.youtubeUrl ? (
                     <>
-                      <p className="side-note">This recording is published on YouTube as unlisted.</p>
+                      <p className="side-note">
+                        {meta.youtubePrivacy === 'unlisted'
+                          ? 'This recording is published on YouTube as unlisted.'
+                          : 'Uploaded to YouTube, but still private - set it to Unlisted so anyone with the link can watch.'}
+                      </p>
                       <a
                         className="youtube-link"
                         href={meta.youtubeUrl}
@@ -738,60 +772,55 @@ export function WatchView({
                       >
                         {meta.youtubeUrl}
                       </a>
-                      <button
-                        type="button"
-                        className="btn-secondary"
-                        onClick={() => {
-                          window.openloom.copyToClipboard(meta.youtubeUrl!);
-                          push('success', 'Link copied.');
-                        }}
-                      >
-                        <Icon.Link width={15} height={15} />
-                        Copy YouTube link
-                      </button>
+                      <div className="btn-row">
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={() => {
+                            window.openloom.copyToClipboard(meta.youtubeUrl!);
+                            push('success', 'Link copied.');
+                          }}
+                        >
+                          <Icon.Link width={15} height={15} />
+                          Copy YouTube link
+                        </button>
+                        {meta.youtubePrivacy === 'private' && (
+                          <button type="button" className="btn-primary" onClick={openStudioFlip}>
+                            Set to Unlisted
+                          </button>
+                        )}
+                      </div>
                     </>
-                  ) : (
+                  ) : youtubePublishing ? (
+                    <p className="side-note">Uploading to YouTube… this takes a few seconds.</p>
+                  ) : youtubeConnected === false ? (
                     <>
-                      <button type="button" className="btn-primary" onClick={startYouTubePublish}>
-                        <Icon.Play width={15} height={15} />
-                        Open YouTube upload
+                      <p className="side-note">
+                        Connect your YouTube account once to upload straight from Open Loom.
+                      </p>
+                      <button type="button" className="btn-primary" onClick={onOpenYouTubeSettings}>
+                        Connect YouTube in Settings
                       </button>
-                      <ol className="youtube-steps">
-                        <li>Your MP4 is revealed in Finder - drop it on the upload page</li>
-                        <li>
-                          Set Visibility to <strong>Unlisted</strong>
-                        </li>
-                        <li>Copy the watch link and come back - it fills in below</li>
-                      </ol>
-                      <label className="field-label" htmlFor="youtube-url">
-                        YouTube link
-                      </label>
-                      <input
-                        id="youtube-url"
-                        type="url"
-                        placeholder="https://www.youtube.com/watch?v=..."
-                        value={youtubeDraft}
-                        onChange={(e) => {
-                          setYoutubeDraft(e.target.value);
-                          if (youtubeError) setYoutubeError(null);
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') saveYouTubeLink();
-                        }}
-                      />
                       {youtubeError && (
                         <p className="youtube-error" role="alert">
                           {youtubeError}
                         </p>
                       )}
-                      <button
-                        type="button"
-                        className="btn-secondary"
-                        onClick={saveYouTubeLink}
-                        disabled={!youtubeDraft.trim()}
-                      >
-                        Save link
+                    </>
+                  ) : (
+                    <>
+                      <p className="side-note">
+                        Uploads to your channel as unlisted and hands back the link.
+                      </p>
+                      <button type="button" className="btn-primary" onClick={startYouTubePublish}>
+                        <Icon.Play width={15} height={15} />
+                        Publish to YouTube
                       </button>
+                      {youtubeError && (
+                        <p className="youtube-error" role="alert">
+                          {youtubeError}
+                        </p>
+                      )}
                     </>
                   )}
                 </div>

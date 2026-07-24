@@ -1,56 +1,124 @@
 /**
- * Electron binding for the guided "Publish to YouTube (unlisted)" helper
- * (SPEC S7). A MANUAL publish - no YouTube API - because uploads made through
- * an unaudited API project are force-locked to private with no appeal. This
- * reveals the recording's MP4, opens YouTube's upload page in the browser, and
- * captures the resulting link the user pastes back.
+ * Electron binding for "Publish to YouTube (unlisted)" (SPEC S7). Uploads the
+ * recording's final MP4 straight to the user's channel via the Data API's
+ * resumable videos.insert, requesting unlisted, and returns the watch link.
+ *
+ * Reality check baked in: an unaudited API project has its uploads force-locked
+ * to private regardless of the requested privacy (docs/DECISIONS.md). We read
+ * back the privacy YouTube actually applied - 'private' until the project passes
+ * the compliance audit - and the Watch view turns that into a one-click
+ * "Set to Unlisted" step. Auth + token handling live in youtube-oauth.ts.
  */
-import { clipboard, shell } from 'electron';
-import type { VideoMeta } from '@shared/types';
-import { library, revealVideo } from './library';
-import { parseYouTubeUrl } from './youtube-core';
+import { shell } from 'electron';
+import fs from 'node:fs';
+import path from 'node:path';
+import { VIDEO_FILES } from '@shared/types';
+import { library } from './library';
+import { connect, disconnect, getAccessToken, isConnected } from './youtube-oauth';
+import { buildVideoInsertMetadata, parseYouTubeUrl, studioEditUrl, watchUrl } from './youtube-core';
+import { log } from './logger';
 
-const YOUTUBE_UPLOAD_URL = 'https://www.youtube.com/upload';
+const RESUMABLE_START =
+  'https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status';
 
-/**
- * Kick off the guided flow: reveal video.mp4 in Finder and open the YouTube
- * upload page in the default browser (both reuse the app's existing primitives -
- * shell.showItemInFolder via revealVideo and shell.openExternal). If the
- * recording already has an AI-generated title, copy it to the clipboard so the
- * user can paste it straight into YouTube's title field.
- */
-export function youtubePublishStart(id: string): { titleCopied: boolean } {
-  const meta = library().get(id); // throws a clear error if the id is unknown
-  revealVideo(id);
-  void shell.openExternal(YOUTUBE_UPLOAD_URL);
-  const aiTitle = meta.ai?.title?.trim();
-  if (aiTitle) {
-    clipboard.writeText(aiTitle);
-    return { titleCopied: true };
+/** Whether a YouTube account is connected. */
+export function youtubeStatus(): { connected: boolean } {
+  return { connected: isConnected() };
+}
+
+/** Run the OAuth consent flow. */
+export function youtubeConnect(): Promise<{ connected: boolean }> {
+  return connect();
+}
+
+/** Forget the stored YouTube tokens. */
+export function youtubeDisconnect(): { connected: boolean } {
+  return disconnect();
+}
+
+/** Turn a failed upload response into a plain-English, user-facing message. */
+async function uploadError(res: Response, action: string): Promise<string> {
+  const text = await res.text().catch(() => '');
+  let detail = text;
+  try {
+    detail = (JSON.parse(text) as { error?: { message?: string } }).error?.message || text;
+  } catch {
+    /* keep raw text */
   }
-  return { titleCopied: false };
+  if (res.status === 401) {
+    return 'YouTube rejected the sign-in. Disconnect and reconnect your account in Settings › YouTube.';
+  }
+  if (res.status === 403 && /quota/i.test(detail)) {
+    return 'YouTube daily upload quota reached. Please try again tomorrow.';
+  }
+  return `Could not ${action}: ${detail || `HTTP ${res.status}`}`;
 }
 
 /**
- * Read the clipboard and return the canonical YouTube watch URL when the user
- * has one copied. The Watch view calls this on window focus mid-publish so the
- * paste-back field is prefilled the moment they return from the browser.
+ * Upload the recording's video.mp4 to YouTube as unlisted and persist the link.
+ * `privacy` reflects what YouTube actually applied ('private' on an unaudited
+ * project); the caller surfaces the flip-to-Unlisted step when it is 'private'.
  */
-export function youtubeReadClipboardLink(): string | null {
-  return parseYouTubeUrl(clipboard.readText())?.url ?? null;
+export async function youtubePublish(
+  id: string
+): Promise<{ url: string; videoId: string; privacy: 'unlisted' | 'private' }> {
+  const store = library();
+  const meta = store.get(id); // throws a clear error if the id is unknown
+  const videoPath = path.join(store.videoDir(id), VIDEO_FILES.video);
+  if (!fs.existsSync(videoPath)) {
+    throw new Error('The recording file is missing, so there is nothing to upload.');
+  }
+
+  const accessToken = await getAccessToken();
+  const bytes = fs.readFileSync(videoPath);
+  const metadata = buildVideoInsertMetadata({
+    title: meta.ai?.title?.trim() || meta.title,
+    description: meta.ai?.summary?.trim() || meta.description,
+    privacyStatus: 'unlisted',
+  });
+
+  // Step 1: open the resumable session (metadata only).
+  const start = await fetch(RESUMABLE_START, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      'content-type': 'application/json; charset=UTF-8',
+      'x-upload-content-length': String(bytes.length),
+      'x-upload-content-type': 'video/*',
+    },
+    body: JSON.stringify(metadata),
+  });
+  if (!start.ok) throw new Error(await uploadError(start, 'start the upload'));
+  const sessionUri = start.headers.get('location');
+  if (!sessionUri) throw new Error('YouTube did not return an upload URL. Please try again.');
+
+  // Step 2: send the bytes to the session URI (fetch sets Content-Length).
+  const put = await fetch(sessionUri, {
+    method: 'PUT',
+    headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'video/*' },
+    body: bytes,
+  });
+  if (!put.ok) throw new Error(await uploadError(put, 'upload the video'));
+
+  const created = (await put.json()) as { id?: string; status?: { privacyStatus?: string } };
+  const videoId = created.id;
+  if (!videoId) throw new Error('YouTube accepted the upload but did not return a video id.');
+
+  const privacy: 'unlisted' | 'private' =
+    created.status?.privacyStatus === 'unlisted' ? 'unlisted' : 'private';
+  const url = watchUrl(videoId);
+  store.update(id, { youtubeUrl: url, youtubePrivacy: privacy });
+  log.info(`youtube: published ${videoId} as ${privacy}`);
+  return { url, videoId, privacy };
 }
 
 /**
- * Validate a pasted YouTube link, persist the normalised canonical URL on the
- * video meta (through the existing library update path) and return the updated
- * meta. Throws a user-facing error when the input is not a YouTube link.
+ * Open studio.youtube.com's edit page for this recording's upload so the user
+ * can flip an unaudited-project private upload to Unlisted in one place.
  */
-export function youtubeSaveLink(id: string, url: string): VideoMeta {
-  const parsed = parseYouTubeUrl(url);
-  if (!parsed) throw new Error('That does not look like a YouTube link.');
-  const meta = library().update(id, { youtubeUrl: parsed.url });
-  // The saved link exists to be pasted to a prospect - copying is part of the
-  // save contract itself, not a UI courtesy.
-  clipboard.writeText(parsed.url);
-  return meta;
+export function youtubeOpenStudioEdit(id: string): void {
+  const meta = library().get(id);
+  const parsed = meta.youtubeUrl ? parseYouTubeUrl(meta.youtubeUrl) : null;
+  if (!parsed) throw new Error('This recording has not been published to YouTube yet.');
+  void shell.openExternal(studioEditUrl(parsed.id));
 }

@@ -93,10 +93,12 @@ const api: OpenLoomAPI = {
   deleteShareComment: (videoId: string, commentId: string) =>
     ipcRenderer.invoke('ol:deleteShareComment', videoId, commentId),
 
-  // publish to YouTube (guided manual, unlisted)
-  youtubePublishStart: (videoId: string) => ipcRenderer.invoke('ol:youtubePublishStart', videoId),
-  youtubeSaveLink: (videoId: string, url: string) => ipcRenderer.invoke('ol:youtubeSaveLink', videoId, url),
-  youtubeReadClipboardLink: () => ipcRenderer.invoke('ol:youtubeReadClipboardLink'),
+  // publish to YouTube (Data API upload, unlisted)
+  youtubeStatus: () => ipcRenderer.invoke('ol:youtubeStatus'),
+  youtubeConnect: () => ipcRenderer.invoke('ol:youtubeConnect'),
+  youtubeDisconnect: () => ipcRenderer.invoke('ol:youtubeDisconnect'),
+  youtubePublish: (videoId: string) => ipcRenderer.invoke('ol:youtubePublish', videoId),
+  youtubeOpenStudioEdit: (videoId: string) => ipcRenderer.send('ol:youtubeOpenStudioEdit', videoId),
 
   // settings & system
   getSettings: () => ipcRenderer.invoke('ol:getSettings'),

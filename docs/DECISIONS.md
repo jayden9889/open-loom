@@ -3,6 +3,31 @@
 Deviations from SPEC.md and notable build-time decisions land here, newest first.
 Format: date · decision · why.
 
+- 2026-07-24 · Publish to YouTube is now a real Data API upload, replacing the guided-manual flow
+  (S7, 2026-07-08 → 2026-07-13). One click uploads the recording's `video.mp4` to the user's own
+  channel via the resumable `videos.insert` endpoint and hands back the watch link - no more
+  reveal-in-Finder + drag-drop + paste-back. Auth is the installed-app OAuth loopback (RFC 8252)
+  with PKCE: consent opens in the system browser (Google blocks logins inside embedded Electron
+  windows), a throwaway `127.0.0.1` server catches the redirect, and the refresh token is stored
+  encrypted via the existing settings-secret path. Credentials are bring-your-own (a Google Cloud
+  "Desktop app" client entered in Settings › YouTube), matching how AI / transcription / S3 keys
+  already work - nothing secret is baked into the distributed binary. The forced-private constraint
+  from S6 is UNCHANGED and still true: an unaudited API project locks every upload to private
+  regardless of the requested `privacyStatus` (re-verified against Google docs 2026-07-24, and the
+  aside that "unlisted is exempt" is false - the lock overrides the parameter). So the uploader
+  requests `unlisted`, reads back the privacy YouTube actually applied, persists it on
+  `VideoMeta.youtubePrivacy`, and when it is `private` the Watch panel shows a one-click "Set to
+  Unlisted" that opens the studio.youtube.com edit page. Path to true hands-off unlisted = pass
+  YouTube's API compliance audit for the Cloud project (see docs/SHARING.md); the unofficial
+  cookie/InnerTube session-automation route was rejected - it is against ToS, every library for it
+  is stale, Google removed the InnerTube discovery docs in March 2025, and a false-positive abuse
+  flag takes down the whole Google account. IPC: `youtubeStatus`, `youtubeConnect`,
+  `youtubeDisconnect`, `youtubePublish(videoId)`, `youtubeOpenStudioEdit(videoId)` replace
+  `youtubePublishStart` / `youtubeSaveLink` / `youtubeReadClipboardLink`. New pure, unit-tested
+  helpers in `youtube-core.ts` (PKCE, auth-URL, loopback-callback and videos.insert metadata
+  builders); OAuth binding in `youtube-oauth.ts`; upload in `youtube.ts`. `parseYouTubeUrl` is kept
+  (now derives the id for the studio-edit URL). Settings gains a YouTube pane.
+
 - 2026-07-14 · FaceCam = macOS system camera effects; both hand-rolled pipelines killed. Two
   in-app implementations were built and discarded the same day after real-camera tests: (1)
   person-segmentation RELIGHTING (scene modes + adaptive gains) - the 256px selfie mask is too

@@ -328,6 +328,7 @@ function AppInner() {
               setView({ name: 'library', folderId: null });
             }}
             onOpenSharingSettings={() => setView({ name: 'settings', pane: 'sharing' })}
+            onOpenYouTubeSettings={() => setView({ name: 'settings', pane: 'youtube' })}
           />
         )}
         {view.name === 'editor' && (

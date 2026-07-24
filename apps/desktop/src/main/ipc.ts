@@ -24,7 +24,13 @@ import {
   testShareProvider,
   deleteShareComment,
 } from './share';
-import { youtubePublishStart, youtubeReadClipboardLink, youtubeSaveLink } from './youtube';
+import {
+  youtubeStatus,
+  youtubeConnect,
+  youtubeDisconnect,
+  youtubePublish,
+  youtubeOpenStudioEdit,
+} from './youtube';
 import { log } from './logger';
 
 function handle(channel: string, fn: (event: IpcMainInvokeEvent, ...args: any[]) => unknown): void {
@@ -107,10 +113,12 @@ export function registerIpc(): void {
   handle('ol:testShareProvider', (_e, cfg: unknown) => testShareProvider(cfg));
   handle('ol:deleteShareComment', (_e, id: string, commentId: string) => deleteShareComment(id, commentId));
 
-  // -- publish to YouTube (guided manual, unlisted) ----------------------------
-  handle('ol:youtubePublishStart', (_e, id: string) => youtubePublishStart(id));
-  handle('ol:youtubeSaveLink', (_e, id: string, url: string) => youtubeSaveLink(id, url));
-  handle('ol:youtubeReadClipboardLink', () => youtubeReadClipboardLink());
+  // -- publish to YouTube (Data API upload, unlisted) --------------------------
+  handle('ol:youtubeStatus', () => youtubeStatus());
+  handle('ol:youtubeConnect', () => youtubeConnect());
+  handle('ol:youtubeDisconnect', () => youtubeDisconnect());
+  handle('ol:youtubePublish', (_e, id: string) => youtubePublish(id));
+  ipcMain.on('ol:youtubeOpenStudioEdit', (_e, id: string) => youtubeOpenStudioEdit(id));
 
   // -- settings & system -------------------------------------------------------
   handle('ol:getSettings', () => getSettingsMasked());

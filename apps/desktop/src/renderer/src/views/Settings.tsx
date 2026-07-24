@@ -10,7 +10,16 @@ import { Icon } from '../components/icons';
 import { attachHealthyCameraStream, type HealthyCameraSession } from '../media';
 import { Modal, Segmented, Toggle, cleanIpcError, useToasts } from '../components/ui';
 
-type Pane = 'general' | 'recording' | 'facecam' | 'shortcuts' | 'transcription' | 'ai' | 'sharing' | 'about';
+type Pane =
+  | 'general'
+  | 'recording'
+  | 'facecam'
+  | 'shortcuts'
+  | 'transcription'
+  | 'ai'
+  | 'sharing'
+  | 'youtube'
+  | 'about';
 
 const PANES: { id: Pane; label: string }[] = [
   { id: 'general', label: 'General' },
@@ -20,6 +29,7 @@ const PANES: { id: Pane; label: string }[] = [
   { id: 'transcription', label: 'Transcription' },
   { id: 'ai', label: 'AI' },
   { id: 'sharing', label: 'Sharing' },
+  { id: 'youtube', label: 'YouTube' },
   { id: 'about', label: 'About' },
 ];
 
@@ -271,6 +281,44 @@ export function SettingsView({
   const [shareTest, setShareTest] = useState<{ state: 'idle' | 'running' | 'ok' | 'fail'; error?: string }>({
     state: 'idle',
   });
+  // YouTube account connection (OAuth loopback runs in the main process).
+  const [ytConnected, setYtConnected] = useState<boolean | null>(null);
+  const [ytBusy, setYtBusy] = useState(false);
+  useEffect(() => {
+    if (pane !== 'youtube') return;
+    void window.openloom.youtubeStatus().then((v) => setYtConnected(v.connected), () => setYtConnected(null));
+  }, [pane]);
+
+  const connectYouTube = () => {
+    setYtBusy(true);
+    void window.openloom.youtubeConnect().then(
+      (v) => {
+        setYtConnected(v.connected);
+        setYtBusy(false);
+        if (v.connected) push('success', 'YouTube account connected.');
+      },
+      (err) => {
+        setYtBusy(false);
+        push('error', cleanIpcError(err));
+      }
+    );
+  };
+
+  const disconnectYouTube = () => {
+    setYtBusy(true);
+    void window.openloom.youtubeDisconnect().then(
+      (v) => {
+        setYtConnected(v.connected);
+        setYtBusy(false);
+        push('info', 'YouTube account disconnected.');
+      },
+      (err) => {
+        setYtBusy(false);
+        push('error', cleanIpcError(err));
+      }
+    );
+  };
+
   const logRef = useRef<HTMLPreElement>(null);
 
   useEffect(() => {
@@ -983,6 +1031,72 @@ export function SettingsView({
                   </Row>
                 </>
               )}
+            </section>
+          )}
+
+          {pane === 'youtube' && (
+            <section aria-label="YouTube">
+              <p className="settings-intro">
+                Publish recordings straight to your own YouTube channel as unlisted. Open Loom uses
+                your own Google Cloud OAuth credentials - nothing is shared with anyone else.
+              </p>
+              <Row
+                label="Client ID"
+                note="From a Google Cloud “Desktop app” OAuth client (APIs & Services › Credentials)."
+              >
+                <SavedInput
+                  value={s.youtube.clientId}
+                  placeholder="xxxxxxxx.apps.googleusercontent.com"
+                  onSave={(v) => save({ youtube: { ...s.youtube, clientId: v } })}
+                  ariaLabel="YouTube OAuth client ID"
+                />
+              </Row>
+              <Row label="Client secret" note="Stored encrypted on this machine.">
+                <SavedInput
+                  type="password"
+                  value={s.youtube.clientSecret}
+                  onSave={(v) => save({ youtube: { ...s.youtube, clientSecret: v } })}
+                  ariaLabel="YouTube OAuth client secret"
+                />
+              </Row>
+              <Row
+                label="Account"
+                note={
+                  ytConnected
+                    ? 'Connected. Recordings can be published from the video page.'
+                    : 'Connect once - consent opens in your browser, then returns here.'
+                }
+              >
+                <div className="btn-row">
+                  {ytConnected ? (
+                    <>
+                      <span className="pill pill-ok">Connected</span>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        disabled={ytBusy}
+                        onClick={disconnectYouTube}
+                      >
+                        Disconnect
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      disabled={ytBusy || !s.youtube.clientId.trim() || !s.youtube.clientSecret}
+                      onClick={connectYouTube}
+                    >
+                      {ytBusy ? 'Connecting…' : 'Connect YouTube'}
+                    </button>
+                  )}
+                </div>
+              </Row>
+              <p className="settings-note">
+                New uploads land unlisted only once your Google Cloud project passes YouTube&apos;s API
+                compliance audit. Until then they upload as private and the video page shows a one-click
+                “Set to Unlisted”.
+              </p>
             </section>
           )}
 

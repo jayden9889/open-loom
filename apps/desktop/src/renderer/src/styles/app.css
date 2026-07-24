@@ -127,6 +127,12 @@ textarea {
   cursor: default;
 }
 
+/* Square icon-only button (toolbar overflow trigger). */
+.btn-icon {
+  padding: 8px;
+  justify-content: center;
+}
+
 .btn-primary:focus-visible,
 .btn-secondary:focus-visible,
 .btn-danger:focus-visible,

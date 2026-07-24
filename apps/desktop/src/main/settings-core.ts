@@ -15,6 +15,8 @@ export const SECRET_PATHS = [
   'ai.apiKey',
   'sharing.server.apiKey',
   'sharing.s3.secretAccessKey',
+  'youtube.clientSecret',
+  'youtube.refreshToken',
 ] as const;
 
 export function defaultSettings(saveDir: string): Settings {
@@ -75,6 +77,11 @@ export function defaultSettings(saveDir: string): Settings {
         allowReactions: true,
         allowDownload: true,
       },
+    },
+    youtube: {
+      clientId: '',
+      clientSecret: '',
+      refreshToken: '',
     },
   };
 }
