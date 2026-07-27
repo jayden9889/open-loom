@@ -1,0 +1,59 @@
+name: Bug report
+description: Something in Open Loom does not work
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: if the app will not open at all on macOS, that is expected on first launch.
+        The build is ad-hoc signed but not notarized. Open **System Settings > Privacy & Security**,
+        scroll to Security, and click **Open Anyway**. See the README's install section.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+      placeholder: |
+        1. Opened a recording
+        2. Clicked ...
+        3. Expected ... but got ...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Open Loom version
+      description: Settings > About, or the release you downloaded.
+      placeholder: "0.1.1"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install it?
+      options:
+        - Downloaded the DMG from Releases
+        - Built from source
+    validations:
+      required: true
+
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and chip
+      description: Apple menu > About This Mac. Both matter - most install problems are one or the other.
+      placeholder: "macOS 15.2, Apple M2"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log output
+      description: |
+        Settings > About > Open log folder, then paste the tail of `main.log`.
+        Please skim it first and redact anything you would not post publicly.
+      render: text

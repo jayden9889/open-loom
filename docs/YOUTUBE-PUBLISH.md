@@ -35,22 +35,27 @@ You need a Google Cloud "Desktop app" OAuth client. About five minutes.
 
 Now every recording has a working **Publish to YouTube** button.
 
-## The "still private" step
+## If your upload lands private
 
-Google **force-locks every upload from an un-audited API project to private**,
-regardless of the privacy the app requests. This is Google policy, not an Open
-Loom limitation (verified against the API docs). So on a fresh project your first
-uploads land **private**, and the video page shows a one-click **Set to Unlisted**
-that opens the YouTube Studio edit page - flip it there and your link works for
-anyone you send it to.
+Open Loom always *requests* unlisted, and reads back the privacy YouTube
+actually applied. On a fresh, un-audited project we saw uploads land **unlisted
+immediately** (tested July 2026), so for most people there is nothing to do.
 
-To make uploads land **unlisted automatically** (no flip), pass Google's
-compliance audit for the project - see below. Until then the flip is one click.
+Google's published policy is stricter than that: it says uploads from an
+un-audited API project created after 28 July 2020 may be restricted to private
+regardless of what the app asks for. Enforcement is clearly not universal, but
+plan for it. If a video does land private, Open Loom notices and the video page
+shows a one-click **Set to Unlisted** that opens the YouTube Studio edit page -
+flip it there and your link works for anyone you send it to.
 
-## Getting to true one-click unlisted: the compliance audit
+To remove the restriction permanently, pass Google's compliance audit for your
+project - see below. You only need this if your uploads are actually landing
+private.
 
-Lifting the private lock requires the **YouTube API Services compliance audit**
-for your Cloud project. It is a one-time form. What you need ready:
+## The compliance audit (only if you need it)
+
+Lifting the private restriction requires the **YouTube API Services compliance
+audit** for your Cloud project. It is a one-time form. What you need ready:
 
 - A **privacy policy URL** (a simple hosted page stating the app uploads to the
   user's own channel and stores nothing server-side).
@@ -66,11 +71,26 @@ Turnaround is typically days to a few weeks. Once approved, uploads requested as
 `unlisted` land unlisted and the flip step disappears automatically (the app
 reads the privacy YouTube returns).
 
-## Why not fully automatic unlisted today
+## Why the official API, and not a session hack
 
-The only way to get true hands-off unlisted right now is to automate your own
-logged-in YouTube session (cookie / Studio internal API). That was rejected: it
-violates YouTube's Terms, every open-source library for it is stale, Google
-removed the internal-API discovery docs in March 2025, and a false-positive
-abuse flag takes down your **whole Google account**. The official-API-plus-flip
-path, graduating to the audit, keeps your account safe.
+The alternative to the Data API is automating your own logged-in YouTube session
+(cookie / Studio internal API). That was rejected: it violates YouTube's Terms,
+every open-source library for it is stale, Google removed the internal-API
+discovery docs in March 2025, and a false-positive abuse flag takes down your
+**whole Google account**. The official API keeps your account safe, and in
+practice it already returns unlisted links.
+
+## How the upload works
+
+Uploads use the resumable protocol in 8 MB chunks, each one acknowledged before
+the next is sent, and streamed to the socket in 256 KB pieces so the progress bar
+reflects real bytes rather than jumping once per chunk. If a chunk fails, Open
+Loom asks YouTube how many bytes it actually holds and resumes from there rather
+than starting over. Only one chunk is held in memory, so file size does not drive
+memory use.
+
+Upload time is bound by your upstream bandwidth: roughly `file size / upload
+speed`. A 100 MB recording on a 6 Mbps uplink takes a little over two minutes,
+and no amount of chunking changes that - the protocol requires contiguous,
+sequentially acknowledged ranges, so chunks cannot be sent in parallel. If
+uploads feel slow, the lever is recording bitrate, not the uploader.

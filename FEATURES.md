@@ -10,7 +10,7 @@ noted where one exists.
 | Loom feature | Loom plan gate | Open Loom |
 |---|---|---|
 | Screen + Camera mode | Free | ✅ v1 |
-| Screen-only mode | Free | ✅ v1 |
+| Screen-only mode (no camera) | Free | ❌ by design - every recording includes the camera |
 | Camera-only mode | Free (720p cap) | ✅ v1 (no artificial cap) |
 | Full screen / window capture | Free | ✅ v1 (per-display + per-window) |
 | Browser-tab capture | Free (extension) | 🔜 roadmap (browser extension) |
@@ -78,7 +78,7 @@ noted where one exists.
 | Loom feature | Loom plan gate | Open Loom |
 |---|---|---|
 | Instant share link on stop (clipboard) | Free | ✅ v1 (link minted at stop; upload continues in background) |
-| Publish to YouTube (unlisted) | — | ✅ v1 (guided manual publish: reveals the MP4, opens youtube.com/upload, copies the AI title, and captures the link you paste back; no API, because unaudited-API uploads are force-locked to private) |
+| Publish to YouTube (unlisted) | — | ✅ v1 (real upload via the YouTube Data API: OAuth 2.0 loopback with PKCE, resumable chunked upload with progress, hands back the watch link. Bring your own Google Cloud OAuth client - see docs/YOUTUBE-PUBLISH.md) |
 | Hosted watch page | Free | ✅ v1 (your own OpenLoom Server — one Docker command — or any S3-compatible bucket with a static player page) |
 | Emoji reactions | Free | ✅ v1 (server mode) |
 | Time-stamped comments (threaded) | Free | ✅ v1 (server mode) |
@@ -108,8 +108,8 @@ user of the app, and the `youtube.upload` OAuth scope requires Google app verifi
 That breaks "record → link works instantly" for an installable open-source tool, so Open Loom
 uses storage **you** own instead. Full analysis: `docs/SHARING.md`.
 
-That said, Open Loom makes the manual path close to one gesture. The **Publish to YouTube
-(unlisted)** helper on each recording reveals the MP4, opens `youtube.com/upload`, copies the AI
-title ready to paste, and then captures the resulting `youtube.com` link straight back onto the
-video as its shareable link (with a Copy button). It is a guided manual publish, never an
-automated backend, precisely because the API path is force-locked to private.
+That said, Open Loom also publishes straight to YouTube. The **Publish to YouTube (unlisted)**
+button on each recording uploads the MP4 through the YouTube Data API and writes the resulting watch
+link back onto the video (with a Copy button). It uses your own Google Cloud OAuth client, so the
+video lands on your channel and no credential of yours passes through anyone else.
+Setup and caveats: `docs/YOUTUBE-PUBLISH.md`.

@@ -12,6 +12,7 @@
   <a href="SPEC.md">Specification</a> &middot;
   <a href="FEATURES.md">Feature parity</a> &middot;
   <a href="docs/SHARING.md">Sharing</a> &middot;
+  <a href="docs/YOUTUBE-PUBLISH.md">Publish to YouTube</a> &middot;
   <a href="docs/SELF-HOSTING.md">Self-hosting</a> &middot;
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
@@ -19,23 +20,22 @@
 <p align="center">
   <a href="https://github.com/jayden9889/open-loom/actions/workflows/ci.yml"><img src="https://github.com/jayden9889/open-loom/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/license-MIT-635BFF" alt="MIT licence">
-  <img src="https://img.shields.io/badge/platform-macOS%2014.2%2B-635BFF" alt="Platform">
+  <img src="https://img.shields.io/badge/platform-macOS%2013%2B-635BFF" alt="Platform">
 </p>
 
 ---
 
-Record your screen, camera or both. Everything lands as a plain, seekable MP4 in a library on your
-own disk. When you want to send a link, share through a share server you run yourself (hosted watch
+Record your screen with your camera, or just your camera. Everything lands as a plain, seekable MP4
+in a library on your own disk. When you want to send a link, share through a share server you run yourself (hosted watch
 page with comments, reactions and viewer analytics) or any S3-compatible bucket. No accounts, no
 telemetry, no vendor lock. MIT licensed.
 
 <p align="center">
-  <img src="docs/media/new-recording.png" alt="Open Loom new-recording panel" width="49%">
   <img src="docs/media/watch.png" alt="Open Loom watch view" width="49%">
+  <img src="docs/media/share-dialog.png" alt="Open Loom share dialog" width="49%">
 </p>
 <p align="center">
-  <img src="docs/media/share-dialog.png" alt="Open Loom share dialog" width="49%">
-  <img src="docs/media/watch-page.png" alt="Open Loom hosted watch page" width="49%">
+  <img src="docs/media/watch-page.png" alt="Open Loom hosted watch page" width="70%">
 </p>
 
 ## Watch the walkthrough
@@ -53,8 +53,10 @@ An 80-second tour of installing, recording, your library, editing, transcription
 
 ## Highlights
 
-- **Three capture modes.** Screen and camera, screen only, or camera only. Pick a whole display or a
-  single application window, with live thumbnails.
+- **Face-first capture.** A slim always-on-top launcher with a live camera preview, and one switch
+  between **Full face** and **Screen** (screen with your camera bubble composited in). Pick a whole
+  display or a single application window. Every recording includes your camera by design - if you
+  want screen capture with no webcam, Open Loom is not the tool for you.
 - **Camera bubble.** Circular, draggable, three sizes, mirror toggle, hide or show mid-recording.
 - **System audio.** Native loopback on macOS 14.2 and later, mixed with your microphone. No virtual
   driver.
@@ -76,7 +78,8 @@ The full comparison with Loom, feature by feature, is in [FEATURES.md](FEATURES.
 
 ## Requirements
 
-- Node.js 20 or newer, and npm
+- Node.js **20.19+ or 22.12+** (older 20.x releases fail to build: vite and electron-vite require
+  those floors). `.nvmrc` pins a known-good version - `nvm use` picks it up.
 - ffmpeg and ffprobe on your PATH. If they are missing, the first-run Setup screen offers a guided
   download of a static build.
 - macOS 14.2 or newer for system-audio capture. The rest of the app works on macOS 13 and later.
@@ -84,11 +87,17 @@ The full comparison with Loom, feature by feature, is in [FEATURES.md](FEATURES.
 
 ## Install the app
 
-The quickest way on an Apple Silicon Mac: download **`OpenLoom-0.1.0-arm64.dmg`** from the
+The quickest way on an Apple Silicon Mac: download **`OpenLoom-0.1.1-arm64.dmg`** from the
 [latest release](https://github.com/jayden9889/open-loom/releases/latest), drag Open Loom into
-Applications, then open it. The build is not code-signed yet, so the first time you must
-**right-click the app, choose Open, then Open again** (macOS remembers the choice after that). It
-then lives in your menu bar and Dock. Intel Macs, Windows and Linux: build from source below.
+Applications, then open it.
+
+The build is ad-hoc signed but **not notarized**, so macOS will refuse it on first launch with
+"Apple could not verify Open Loom is free of malware". To allow it: open **System Settings >
+Privacy & Security**, scroll to the Security section, and click **Open Anyway** next to the Open
+Loom message, then confirm. macOS remembers the choice. (The older right-click > Open trick was
+removed in macOS 15 Sequoia; on macOS 14 and earlier it still works.)
+
+It then lives in your menu bar and Dock. Intel Macs, Windows and Linux: build from source below.
 
 ## Run from source
 
@@ -199,7 +208,7 @@ Global shortcuts work even when Open Loom is hidden, and are editable in Setting
 | Pause or resume | Alt+Shift+P |
 | Cancel recording | Alt+Shift+C |
 | Restart recording | Cmd+Shift+R |
-| Toggle drawing | Cmd+Shift+D |
+| Toggle drawing | Control+1 |
 
 In the watch player:
 

@@ -1,7 +1,7 @@
 {
   "name": "openloom-desktop",
   "productName": "OpenLoom",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "license": "MIT",
   "description": "Open Loom desktop app: local-first screen recorder with Loom-parity UX.",
