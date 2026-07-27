@@ -82,6 +82,11 @@ The full comparison with Loom, feature by feature, is in [FEATURES.md](FEATURES.
   those floors). `.nvmrc` pins a known-good version - `nvm use` picks it up.
 - ffmpeg and ffprobe on your PATH. If they are missing, the first-run Setup screen offers a guided
   download of a static build.
+- **Building from source on macOS:** Xcode Command Line Tools (`xcode-select --install`). One
+  optional native addon (the FaceCam Portrait and Studio Light effects) compiles Objective-C++
+  against AVFoundation at install time. Without the tools it fails quietly, `npm install` still
+  succeeds, and the app runs with those two effects doing nothing - the reason only appears in the
+  log. Everything else works.
 - macOS 14.2 or newer for system-audio capture. The rest of the app works on macOS 13 and later.
   Windows and Linux code paths are kept portable but v1 is only tested on macOS.
 
