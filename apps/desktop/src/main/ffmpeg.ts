@@ -111,6 +111,10 @@ async function pump(): Promise<void> {
     job.resolve();
   } catch (err) {
     log.error(`ffmpeg job ${job.kind} for ${job.videoId} failed: ${String(err)}`);
+    // A terminal event is what clears the renderer's "job running" state. Without
+    // it a failed transcribe left the panel spinning forever with its retry
+    // button disabled. The AI and share producers already emit one on failure.
+    report(100, `${job.kind} failed`);
     job.reject(err);
   } finally {
     running = false;

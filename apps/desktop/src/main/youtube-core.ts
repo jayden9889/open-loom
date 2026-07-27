@@ -69,8 +69,33 @@ export function studioEditUrl(id: string): string {
 
 export const YT_AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
 export const YT_TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
-/** Upload + set metadata (incl. privacyStatus) on the user's own channel. */
-export const YT_SCOPE = 'https://www.googleapis.com/auth/youtube.upload';
+/**
+ * Upload + set metadata (incl. privacyStatus) on the user's own channel, plus
+ * readonly so connect can resolve which channel the token actually reaches
+ * (channels.list rejects the upload scope alone). Space-separated per OAuth 2.0.
+ */
+export const YT_SCOPE =
+  'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly';
+
+/** The connected account's own channel - used at connect time to catch wrong-account sign-ins. */
+export const YT_CHANNELS_ENDPOINT =
+  'https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true';
+
+/**
+ * Extract the account's own channel from a channels.list?mine=true response.
+ * Returns null when the response has no channel (the account cannot receive
+ * uploads - the exact failure behind a bare 401 youtubeSignupRequired later).
+ */
+export function parseOwnChannel(json: unknown): { id: string; title: string } | null {
+  if (typeof json !== 'object' || json === null) return null;
+  const items = (json as { items?: unknown }).items;
+  if (!Array.isArray(items) || items.length === 0) return null;
+  const first = items[0] as { id?: unknown; snippet?: { title?: unknown } };
+  const id = typeof first.id === 'string' ? first.id : '';
+  const title = typeof first.snippet?.title === 'string' ? first.snippet.title : '';
+  if (!id) return null;
+  return { id, title };
+}
 
 /** base64url of arbitrary bytes (no '=' padding, URL-safe alphabet). */
 function base64url(buf: Buffer): string {
@@ -135,6 +160,42 @@ export function parseLoopbackCallback(
   if (state) out.state = state;
   if (error) out.error = error;
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Resumable upload chunking
+//
+// A single PUT of the whole file drops the connection on anything sizeable (a
+// 100 MB recording died at ~99 MB with a bare "fetch failed"), and gives no
+// progress to show. Google's resumable protocol takes the file in chunks, each
+// one acknowledged, so we can report progress and resume where it stopped.
+// ---------------------------------------------------------------------------
+
+/** Google requires every chunk except the last to be a multiple of 256 KiB. */
+export const UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024;
+
+/** `Content-Range` for a chunk carrying bytes [start, endInclusive] of `total`. */
+export function contentRange(start: number, endInclusive: number, total: number): string {
+  return `bytes ${start}-${endInclusive}/${total}`;
+}
+
+/** `Content-Range` for the empty PUT that asks how many bytes the server holds. */
+export function queryRange(total: number): string {
+  return `bytes */${total}`;
+}
+
+/**
+ * Byte offset to send next, read from a 308's `Range: bytes=0-<last>` header.
+ * The header is the count of bytes the server actually stored, which can be
+ * less than we sent, so it is the resume point - not our own bookkeeping.
+ * Absent or unparseable header means the server holds nothing yet (offset 0).
+ */
+export function parseResumeOffset(range: string | null | undefined): number {
+  if (!range) return 0;
+  const m = /bytes=(\d+)-(\d+)/.exec(range.trim());
+  if (!m) return 0;
+  const last = Number(m[2]);
+  return Number.isFinite(last) ? last + 1 : 0;
 }
 
 // ---------------------------------------------------------------------------

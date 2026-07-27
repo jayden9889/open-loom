@@ -1382,6 +1382,26 @@ textarea {
   cursor: pointer;
   opacity: 0;
   transition: opacity var(--ol-dur) var(--ol-ease);
+  /* Explicit rather than relying on the UA default: the whole frame must be
+     visible, letterboxed if need be, never cropped or overflowing. */
+  object-fit: contain;
+}
+
+/* Fullscreen is the screen's shape, not 16:9. Keeping the fixed aspect-ratio
+   here left the player box a different shape from the display, so the frame
+   spilled past the edges instead of fitting inside it. */
+.player:fullscreen {
+  aspect-ratio: auto;
+  width: 100vw;
+  height: 100vh;
+  border-radius: 0;
+  background: #000;
+}
+
+.player:fullscreen video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .player video.ready {

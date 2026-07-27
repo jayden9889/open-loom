@@ -37,6 +37,9 @@ function VideoCard({
   onRetryUpload: () => void;
 }) {
   const [hover, setHover] = useState(false);
+  /** Tracked per image: a missing preview.gif must not blank the still as well. */
+  const [thumbFailed, setThumbFailed] = useState(false);
+  const [gifFailed, setGifFailed] = useState(false);
   const thumb = window.openloom.fileUrl(video.id, 'thumb.jpg');
   const gif = window.openloom.fileUrl(video.id, 'preview.gif');
   const uploading = upload !== undefined && !upload.failed;
@@ -57,7 +60,17 @@ function VideoCard({
       }}
     >
       <button type="button" className="video-thumb" onClick={onOpen} aria-label={`Watch ${video.title}`}>
-        <img src={hover ? gif : thumb} alt="" loading="lazy" onError={(e) => ((e.target as HTMLImageElement).style.visibility = 'hidden')} />
+        {/* Hiding via an inline style React does not own left the tile blank for
+            the rest of the session: on mouse-leave React swaps the src back but
+            never clears the style it never set. Track it as state instead, keyed
+            on which image actually failed. */}
+        <img
+          src={hover ? gif : thumb}
+          alt=""
+          loading="lazy"
+          style={{ visibility: (hover ? gifFailed : thumbFailed) ? 'hidden' : undefined }}
+          onError={() => (hover ? setGifFailed(true) : setThumbFailed(true))}
+        />
         <span className="video-duration">{formatDuration(video.durationSec)}</span>
         {uploading && (
           <span className="video-upload" aria-label={`Uploading ${upload!.pct}%`}>

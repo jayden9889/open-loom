@@ -283,10 +283,17 @@ export function SettingsView({
   });
   // YouTube account connection (OAuth loopback runs in the main process).
   const [ytConnected, setYtConnected] = useState<boolean | null>(null);
+  const [ytChannel, setYtChannel] = useState('');
   const [ytBusy, setYtBusy] = useState(false);
   useEffect(() => {
     if (pane !== 'youtube') return;
-    void window.openloom.youtubeStatus().then((v) => setYtConnected(v.connected), () => setYtConnected(null));
+    void window.openloom.youtubeStatus().then(
+      (v) => {
+        setYtConnected(v.connected);
+        setYtChannel(v.channel);
+      },
+      () => setYtConnected(null)
+    );
   }, [pane]);
 
   const connectYouTube = () => {
@@ -294,8 +301,11 @@ export function SettingsView({
     void window.openloom.youtubeConnect().then(
       (v) => {
         setYtConnected(v.connected);
+        setYtChannel(v.channel);
         setYtBusy(false);
-        if (v.connected) push('success', 'YouTube account connected.');
+        if (v.connected) {
+          push('success', v.channel ? `YouTube connected: ${v.channel}` : 'YouTube account connected.');
+        }
       },
       (err) => {
         setYtBusy(false);
@@ -309,6 +319,7 @@ export function SettingsView({
     void window.openloom.youtubeDisconnect().then(
       (v) => {
         setYtConnected(v.connected);
+        setYtChannel('');
         setYtBusy(false);
         push('info', 'YouTube account disconnected.');
       },
@@ -1063,14 +1074,16 @@ export function SettingsView({
                 label="Account"
                 note={
                   ytConnected
-                    ? 'Connected. Recordings can be published from the video page.'
-                    : 'Connect once - consent opens in your browser, then returns here.'
+                    ? ytChannel
+                      ? `Uploads go to “${ytChannel}”. Wrong channel? Disconnect and reconnect with the right Google account.`
+                      : 'Connected. Recordings can be published from the video page.'
+                    : 'Connect once - consent opens in your browser, then returns here. Pick the Google account that owns your channel.'
                 }
               >
                 <div className="btn-row">
                   {ytConnected ? (
                     <>
-                      <span className="pill pill-ok">Connected</span>
+                      <span className="pill pill-ok">{ytChannel ? `Connected: ${ytChannel}` : 'Connected'}</span>
                       <button
                         type="button"
                         className="btn-secondary"

@@ -34,6 +34,32 @@ function totalKept(segs: Seg[]): number {
   return segs.reduce((sum, s) => sum + (s.kept ? s.end - s.start : 0), 0);
 }
 
+/**
+ * Mark this edge's own leading ('in') or trailing ('out') removed run as kept,
+ * undoing the current trim so a handle can be dragged back out again. Stops at
+ * the first kept segment, so interior cuts made by split/remove are preserved.
+ */
+export function restoreEdgeRun(segs: Seg[], edge: 'in' | 'out'): Seg[] {
+  const out = segs.map((s) => ({ ...s }));
+  const order = edge === 'in' ? out : [...out].reverse();
+  for (const s of order) {
+    if (s.kept) break;
+    s.kept = true;
+  }
+  return out;
+}
+
+/** Collapse touching segments that share a kept state, so drags do not fragment. */
+export function mergeAdjacent(segs: Seg[]): Seg[] {
+  const out: Seg[] = [];
+  for (const s of segs) {
+    const last = out[out.length - 1];
+    if (last && last.kept === s.kept && Math.abs(last.end - s.start) < 0.001) last.end = s.end;
+    else out.push({ ...s });
+  }
+  return out;
+}
+
 const FILMSTRIP_FRAMES = 14;
 
 export function EditorView({
@@ -314,9 +340,19 @@ export function EditorView({
     setSelected(null);
   };
 
-  /** Trim handles: everything before/after t becomes a removed section. */
+  /**
+   * Trim handles: everything before/after t becomes a removed section.
+   *
+   * The handle re-places its own boundary, so it has to move both ways. Cutting
+   * straight from the current segments made every drag additive - an already
+   * removed head just got split, never shrunk, so dragging a handle back to
+   * widen the keep-range (or nudging it with an arrow key) did nothing at all.
+   * Restore this edge's own removed run first, then cut at the new position.
+   * Interior removed sections, which belong to split/remove, are left alone.
+   */
   const applyTrim = (edge: 'in' | 'out', t: number) => {
-    setSegs((prev) => {
+    setSegs((prevRaw) => {
+      const prev = restoreEdgeRun(prevRaw, edge);
       const dur = prev.length > 0 ? prev[prev.length - 1]!.end : duration;
       const clamped = Math.max(0, Math.min(t, dur));
       const out: Seg[] = [];
@@ -328,7 +364,7 @@ export function EditorView({
           if (s.end - start < 0.01) continue;
           out.push({ start, end: s.end, kept: s.kept });
         }
-        if (out.every((s) => !s.kept)) return prev;
+        if (out.every((s) => !s.kept)) return prevRaw;
       } else {
         for (const s of prev) {
           if (s.start >= clamped) continue;
@@ -337,9 +373,9 @@ export function EditorView({
           out.push({ start: s.start, end, kept: s.kept });
         }
         if (clamped < dur - MIN_SEG) out.push({ start: clamped, end: dur, kept: false });
-        if (out.every((s) => !s.kept)) return prev;
+        if (out.every((s) => !s.kept)) return prevRaw;
       }
-      return out;
+      return mergeAdjacent(out);
     });
   };
 

@@ -13,6 +13,7 @@ import { VIDEO_FILES } from '@shared/types';
 import * as ffmpeg from './ffmpeg';
 import { trimVideoFile, stitchVideoFiles, type KeepRange } from './editor-core';
 import { library } from './library';
+import { buildVtt, retimeSegments, retimeThroughRanges } from './transcribe-core';
 import { log } from './logger';
 
 function videoPath(id: string): string {
@@ -39,8 +40,53 @@ function ensureOriginalBanked(id: string): void {
   }
 }
 
+/**
+ * Re-time transcript.json, transcript.vtt and the AI chapters onto the trimmed
+ * timeline. Only a keep-ranges trim shifts timestamps; stitch appends at the end
+ * and revert restores the original, so both leave existing times valid.
+ */
+function retimeTranscriptAndChapters(
+  id: string,
+  ranges: { start: number; end: number }[],
+  patch: Partial<VideoMeta>
+): void {
+  const store = library();
+  const dir = store.videoDir(id);
+  const jsonPath = path.join(dir, VIDEO_FILES.transcriptJson);
+  if (fs.existsSync(jsonPath)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(jsonPath, 'utf8')) as {
+        segments?: { start: number; end: number; text: string }[];
+      };
+      const retimed = retimeSegments(data.segments ?? [], ranges);
+      fs.writeFileSync(jsonPath, JSON.stringify({ ...data, segments: retimed }, null, 2));
+      fs.writeFileSync(path.join(dir, VIDEO_FILES.captions), buildVtt(retimed));
+      log.info(`re-timed ${retimed.length} transcript segments for ${id} after trim`);
+    } catch (err) {
+      // A transcript we cannot re-time is worse than none: it would point at the
+      // wrong moments and keep matching cut words in search.
+      log.warn(`could not re-time the transcript for ${id}, dropping it: ${String(err)}`);
+      fs.rmSync(jsonPath, { force: true });
+      fs.rmSync(path.join(dir, VIDEO_FILES.captions), { force: true });
+      patch.transcript = undefined;
+    }
+  }
+
+  const meta = store.get(id);
+  if (meta.ai?.chapters) {
+    const chapters = meta.ai.chapters
+      .map((c) => ({ ...c, t: retimeThroughRanges(c.t, ranges) }))
+      .filter((c): c is typeof c & { t: number } => c.t !== null);
+    patch.ai = { ...meta.ai, chapters };
+  }
+}
+
 /** Regenerate thumb + gif + waveform and refresh meta after an edit (E4). */
-async function refreshDerivedAssets(id: string, report: (pct: number, note?: string) => void): Promise<void> {
+async function refreshDerivedAssets(
+  id: string,
+  report: (pct: number, note?: string) => void,
+  keptRanges?: { start: number; end: number }[]
+): Promise<void> {
   const bins = ffmpeg.requireBinaries();
   const store = library();
   const dir = store.videoDir(id);
@@ -63,8 +109,11 @@ async function refreshDerivedAssets(id: string, report: (pct: number, note?: str
     sizeBytes: info.sizeBytes,
     edits: { trimmedFrom: VIDEO_FILES.original },
   };
-  // Chapters that now point beyond the end are dropped (E4 + A1 validity).
-  if (meta.ai?.chapters) {
+  if (keptRanges && keptRanges.length > 0) {
+    retimeTranscriptAndChapters(id, keptRanges, patch);
+  } else if (meta.ai?.chapters) {
+    // No range map (stitch/revert): timestamps still line up, so only drop the
+    // chapters that now point past the end.
     patch.ai = { ...meta.ai, chapters: meta.ai.chapters.filter((c) => c.t <= info.durationSec) };
   }
   store.update(id, patch);
@@ -92,7 +141,7 @@ export async function trimVideo(id: string, ranges: KeepRange[]): Promise<void> 
       );
       fs.renameSync(tmpOut, input);
       log.info(`trim of ${id} saved via ${result.method} (${result.durationSec}s)`);
-      await refreshDerivedAssets(id, report);
+      await refreshDerivedAssets(id, report, ranges);
       report(100, result.method === 'copy' ? 'Saved with a lossless cut' : 'Saved with a precise re-encode');
     } finally {
       fs.rmSync(tmpOut, { force: true });

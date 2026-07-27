@@ -63,6 +63,21 @@ function getStore(): Store<{ settings: Settings }> {
       });
       log.info('migrated draw shortcut to Control+1');
     }
+    // A secret written to the store by hand, or by a build that predated
+    // encryption, stays plaintext forever - decryptSecret passes unprefixed
+    // values straight through, so nothing else would ever upgrade it.
+    const current = store.get('settings');
+    if (current) {
+      const upgraded = encryptSecretsInPatch(
+        current as unknown as Record<string, unknown>,
+        current,
+        codec
+      ) as unknown as Settings;
+      if (JSON.stringify(upgraded) !== JSON.stringify(current)) {
+        store.set('settings', upgraded);
+        log.info('encrypted plaintext secrets found in the settings store');
+      }
+    }
   }
   return store;
 }

@@ -8,11 +8,16 @@ import { describe, expect, it } from 'vitest';
 import {
   buildAuthUrl,
   buildVideoInsertMetadata,
+  contentRange,
   parseLoopbackCallback,
+  parseOwnChannel,
+  parseResumeOffset,
   parseYouTubeUrl,
   pkcePair,
+  queryRange,
   randomToken,
   studioEditUrl,
+  UPLOAD_CHUNK_BYTES,
   watchUrl,
   YT_AUTH_ENDPOINT,
   YT_SCOPE,
@@ -219,5 +224,64 @@ describe('buildVideoInsertMetadata', () => {
     expect(buildVideoInsertMetadata({ title: 'T', privacyStatus: 'private' }).status.privacyStatus).toBe(
       'private'
     );
+  });
+});
+
+describe('YT_SCOPE', () => {
+  it('requests upload plus readonly (readonly powers the connect-time channel check)', () => {
+    const scopes = YT_SCOPE.split(' ');
+    expect(scopes).toContain('https://www.googleapis.com/auth/youtube.upload');
+    expect(scopes).toContain('https://www.googleapis.com/auth/youtube.readonly');
+  });
+});
+
+describe('resumable upload chunking', () => {
+  it('uses a chunk size Google accepts (a multiple of 256 KiB)', () => {
+    expect(UPLOAD_CHUNK_BYTES % (256 * 1024)).toBe(0);
+    expect(UPLOAD_CHUNK_BYTES).toBeGreaterThan(0);
+  });
+
+  it('builds an inclusive Content-Range for a chunk', () => {
+    expect(contentRange(0, 8388607, 105307498)).toBe('bytes 0-8388607/105307498');
+    expect(contentRange(8388608, 10485759, 10485760)).toBe('bytes 8388608-10485759/10485760');
+  });
+
+  it('builds the query range used to ask how far the server got', () => {
+    expect(queryRange(105307498)).toBe('bytes */105307498');
+  });
+
+  it('resumes at the byte after the last one the server stored', () => {
+    expect(parseResumeOffset('bytes=0-262143')).toBe(262144);
+    expect(parseResumeOffset('bytes=0-0')).toBe(1);
+  });
+
+  it('treats a missing or unparseable Range as "server has nothing"', () => {
+    expect(parseResumeOffset(null)).toBe(0);
+    expect(parseResumeOffset(undefined)).toBe(0);
+    expect(parseResumeOffset('')).toBe(0);
+    expect(parseResumeOffset('garbage')).toBe(0);
+  });
+
+  it('tolerates surrounding whitespace in the header', () => {
+    expect(parseResumeOffset('  bytes=0-999  ')).toBe(1000);
+  });
+});
+
+describe('parseOwnChannel', () => {
+  it('extracts the channel id and title from a channels.list?mine=true response', () => {
+    const json = { items: [{ id: 'UCabc123', snippet: { title: 'Jayden Mortimer' } }] };
+    expect(parseOwnChannel(json)).toEqual({ id: 'UCabc123', title: 'Jayden Mortimer' });
+  });
+  it('returns null when the account has no channel (empty items)', () => {
+    expect(parseOwnChannel({ items: [] })).toBeNull();
+    expect(parseOwnChannel({ kind: 'youtube#channelListResponse' })).toBeNull();
+  });
+  it('returns null for garbage input', () => {
+    expect(parseOwnChannel(null)).toBeNull();
+    expect(parseOwnChannel('nope')).toBeNull();
+    expect(parseOwnChannel({ items: [{ snippet: { title: 'no id' } }] })).toBeNull();
+  });
+  it('tolerates a missing title (id alone is enough to prove uploads can land)', () => {
+    expect(parseOwnChannel({ items: [{ id: 'UCabc123' }] })).toEqual({ id: 'UCabc123', title: '' });
   });
 });

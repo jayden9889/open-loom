@@ -68,6 +68,48 @@ export function parseVttToSegments(raw: string): TranscriptSegment[] {
   return segments;
 }
 
+/**
+ * Map one timestamp from the original timeline onto the trimmed one, or null
+ * when it fell inside a removed section. `ranges` are the kept ranges in order.
+ */
+export function retimeThroughRanges(
+  t: number,
+  ranges: { start: number; end: number }[]
+): number | null {
+  let elapsed = 0;
+  for (const r of ranges) {
+    if (t < r.start) return null;
+    if (t <= r.end) return elapsed + (t - r.start);
+    elapsed += r.end - r.start;
+  }
+  return null;
+}
+
+/**
+ * Re-time transcript segments onto a trimmed timeline. A trim shifts everything
+ * after each cut, so leaving the transcript alone left it describing a video
+ * that no longer exists: lines pointed at the wrong moment, library search
+ * matched words that had been cut out, and AI regeneration read the stale copy.
+ * Segments spanning a cut are clipped to the parts that survived.
+ */
+export function retimeSegments(
+  segments: TranscriptSegment[],
+  ranges: { start: number; end: number }[]
+): TranscriptSegment[] {
+  const out: TranscriptSegment[] = [];
+  let elapsed = 0;
+  for (const r of ranges) {
+    for (const s of segments) {
+      const start = Math.max(s.start, r.start);
+      const end = Math.min(s.end, r.end);
+      if (end - start < 0.01) continue;
+      out.push({ start: elapsed + (start - r.start), end: elapsed + (end - r.start), text: s.text });
+    }
+    elapsed += r.end - r.start;
+  }
+  return out.sort((a, b) => a.start - b.start);
+}
+
 // ---------------------------------------------------------------------------
 // Segment hygiene
 // ---------------------------------------------------------------------------

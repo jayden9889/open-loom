@@ -295,6 +295,8 @@ export interface Settings {
     clientSecret: string;
     /** Long-lived refresh token from the loopback consent. Stored encrypted; read back masked. Empty = not connected. */
     refreshToken: string;
+    /** Title of the connected account's YouTube channel, resolved at connect time. Display only; '' = unknown. */
+    channelTitle: string;
   };
 }
 
@@ -517,10 +519,14 @@ export interface OpenLoomAPI {
   deleteShareComment(videoId: string, commentId: string): Promise<void>;
 
   // publish to YouTube (Data API upload, unlisted; additive to SPEC section 5, see docs/DECISIONS.md)
-  /** Whether a YouTube account is connected (a refresh token is stored). */
-  youtubeStatus(): Promise<{ connected: boolean }>;
-  /** Run the Google OAuth loopback consent and store the refresh token. Returns the new connection state. */
-  youtubeConnect(): Promise<{ connected: boolean }>;
+  /** Whether a YouTube account is connected (a refresh token is stored). `channel` is the connected channel's title ('' = unknown). */
+  youtubeStatus(): Promise<{ connected: boolean; channel: string }>;
+  /**
+   * Run the Google OAuth loopback consent and store the refresh token. Resolves the
+   * account's channel and rejects if the account has none (nothing is stored then),
+   * so a wrong-account connect fails loudly here instead of at first publish.
+   */
+  youtubeConnect(): Promise<{ connected: boolean; channel: string }>;
   /** Forget the stored YouTube tokens (does not revoke server-side). */
   youtubeDisconnect(): Promise<{ connected: boolean }>;
   /**

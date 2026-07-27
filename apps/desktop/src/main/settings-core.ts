@@ -82,6 +82,7 @@ export function defaultSettings(saveDir: string): Settings {
       clientId: '',
       clientSecret: '',
       refreshToken: '',
+      channelTitle: '',
     },
   };
 }

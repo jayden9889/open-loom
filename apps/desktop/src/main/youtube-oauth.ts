@@ -14,7 +14,15 @@ import type { AddressInfo } from 'node:net';
 import { shell } from 'electron';
 import type { Settings } from '@shared/types';
 import { getSettings, getSecret, setSettings } from './settings';
-import { buildAuthUrl, parseLoopbackCallback, pkcePair, randomToken, YT_TOKEN_ENDPOINT } from './youtube-core';
+import {
+  buildAuthUrl,
+  parseLoopbackCallback,
+  parseOwnChannel,
+  pkcePair,
+  randomToken,
+  YT_CHANNELS_ENDPOINT,
+  YT_TOKEN_ENDPOINT,
+} from './youtube-core';
 import { log } from './logger';
 
 /** In-memory access-token cache; the refresh token is the durable credential. */
@@ -30,6 +38,11 @@ interface TokenResponse {
 /** True once a refresh token is stored (i.e. the user has connected an account). */
 export function isConnected(): boolean {
   return getSecret('youtube.refreshToken').trim().length > 0;
+}
+
+/** Title of the connected account's channel, resolved at connect time ('' = unknown). */
+export function connectedChannel(): string {
+  return getSettings().youtube.channelTitle.trim();
 }
 
 function requireClient(): { clientId: string; clientSecret: string } {
@@ -121,8 +134,32 @@ function runLoopback(
   });
 }
 
+/**
+ * The channel the freshly consented token uploads to, or null when the account
+ * has none (uploads would 401 youtubeSignupRequired). A failed lookup (network,
+ * API hiccup) returns '' titles rather than blocking the connect - the channel
+ * name is a guard, not a dependency.
+ */
+async function resolveOwnChannel(
+  accessToken: string
+): Promise<{ id: string; title: string } | null | 'lookup-failed'> {
+  try {
+    const res = await fetch(YT_CHANNELS_ENDPOINT, {
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) {
+      log.warn(`youtube: channel lookup failed (HTTP ${res.status})`);
+      return 'lookup-failed';
+    }
+    return parseOwnChannel(await res.json());
+  } catch (err) {
+    log.warn(`youtube: channel lookup failed: ${String(err)}`);
+    return 'lookup-failed';
+  }
+}
+
 /** Run the consent flow and persist the refresh token. Returns the new state. */
-export async function connect(): Promise<{ connected: boolean }> {
+export async function connect(): Promise<{ connected: boolean; channel: string }> {
   const { clientId, clientSecret } = requireClient();
   const { verifier, challenge } = pkcePair();
   const state = randomToken(16);
@@ -142,11 +179,25 @@ export async function connect(): Promise<{ connected: boolean }> {
   if (!tokens.refresh_token) {
     throw new Error('Google did not return a refresh token. Disconnect and connect again.');
   }
+
+  // Catch the wrong-account sign-in HERE, not at first publish: an account with
+  // no channel cannot receive uploads, so refuse to store its token at all.
+  const channel = await resolveOwnChannel(tokens.access_token);
+  if (channel === null) {
+    throw new Error(
+      'That Google account has no YouTube channel, so uploads would fail. ' +
+        'Connect again and pick the Google account (or brand account) that owns your channel.'
+    );
+  }
+  const channelTitle = channel === 'lookup-failed' ? '' : channel.title;
+
   // Deep-merged + encrypted by the settings layer; clientId/secret untouched.
-  setSettings({ youtube: { refreshToken: tokens.refresh_token } } as Partial<Settings>);
+  setSettings({
+    youtube: { refreshToken: tokens.refresh_token, channelTitle },
+  } as Partial<Settings>);
   accessCache = { token: tokens.access_token, expiresAt: Date.now() + (tokens.expires_in - 60) * 1000 };
-  log.info('youtube: account connected');
-  return { connected: true };
+  log.info(`youtube: account connected${channelTitle ? ` (channel: ${channelTitle})` : ''}`);
+  return { connected: true, channel: channelTitle };
 }
 
 /** A valid access token, refreshing via the stored refresh token when needed. */
@@ -168,7 +219,7 @@ export async function getAccessToken(): Promise<string> {
 /** Forget the stored tokens (does not revoke server-side). */
 export function disconnect(): { connected: boolean } {
   accessCache = null;
-  setSettings({ youtube: { refreshToken: '' } } as Partial<Settings>);
+  setSettings({ youtube: { refreshToken: '', channelTitle: '' } } as Partial<Settings>);
   log.info('youtube: account disconnected');
   return { connected: false };
 }

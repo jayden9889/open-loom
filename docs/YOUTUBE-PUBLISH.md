@@ -12,16 +12,26 @@ You need a Google Cloud "Desktop app" OAuth client. About five minutes.
 1. **Create/pick a project** at <https://console.cloud.google.com>.
 2. **Enable the API:** APIs & Services › Library › search **YouTube Data API v3** › Enable.
 3. **Configure the consent screen:** APIs & Services › OAuth consent screen.
-   - User type **External**.
-   - Add the scope `https://www.googleapis.com/auth/youtube.upload`.
-   - While the app is unverified, add your own Google account under **Test users**
-     (or you will have to click through the "unverified app" warning at consent).
+   - User type **External**. (Internal locks out every account outside your
+     Workspace org, including personal @gmail.com - the `org_internal` error.)
+   - Add the scopes `https://www.googleapis.com/auth/youtube.upload` and
+     `https://www.googleapis.com/auth/youtube.readonly` (readonly lets Open Loom
+     name the channel you connected and refuse channel-less accounts).
+   - While the app is unverified, add **the Google account that owns your YouTube
+     channel** under **Test users** (or you will have to click through the
+     "unverified app" warning at consent). Testing mode expires refresh tokens
+     after 7 days, so expect a weekly reconnect until you publish the consent
+     screen to production.
 4. **Create the client:** APIs & Services › Credentials › Create credentials ›
    OAuth client ID › Application type **Desktop app**. Copy the **Client ID** and
    **Client secret**.
 5. **In Open Loom:** Settings › YouTube › paste the Client ID and Client secret,
-   then **Connect YouTube**. Consent opens in your browser; approve and return.
-   The secret and the resulting refresh token are stored encrypted on your Mac.
+   then **Connect YouTube**. Consent opens in your browser; **pick the Google
+   account (or brand account) that owns your channel** and approve. Open Loom
+   resolves the channel the token reaches and shows its name in Settings -
+   an account with no channel is refused on the spot instead of failing with a
+   cryptic 401 at first publish. The secret and the resulting refresh token are
+   stored encrypted on your Mac.
 
 Now every recording has a working **Publish to YouTube** button.
 

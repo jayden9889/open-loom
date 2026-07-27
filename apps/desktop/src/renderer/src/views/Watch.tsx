@@ -52,7 +52,8 @@ function parseVttTime(t: string): number {
   return sec;
 }
 
-function parseVtt(raw: string): VttCue[] {
+/** Exported for the regression test; the player itself only needs it locally. */
+export function parseVtt(raw: string): VttCue[] {
   const cues: VttCue[] = [];
   const blocks = raw.replace(/\r/g, '').split('\n\n');
   for (const block of blocks) {
@@ -67,7 +68,15 @@ function parseVtt(raw: string): VttCue[] {
       .replace(/<[^>]+>/g, '')
       .trim();
     if (!text) continue;
-    cues.push({ start: parseVttTime(startRaw), end: parseVttTime(endRaw.split(' ')[0] ?? endRaw), text });
+    // WebVTT requires whitespace around '-->', so endRaw always leads with a
+    // space: splitting before trimming yields '' (not nullish, so `?? endRaw`
+    // never fires) and every cue ended up with end: NaN, which silently killed
+    // captions and transcript highlighting. Matches transcribe-core's parser.
+    cues.push({
+      start: parseVttTime(startRaw),
+      end: parseVttTime(endRaw.trim().split(' ')[0] ?? endRaw),
+      text,
+    });
   }
   return cues;
 }
@@ -122,6 +131,13 @@ export function WatchView({
   const [moreMenu, setMoreMenu] = useState<{ x: number; y: number } | null>(null);
   const [transcriptQuery, setTranscriptQuery] = useState('');
   const [refresh, setRefresh] = useState(0);
+  /**
+   * Separate cache-buster for video.mp4. Transcribe/AI leave the media file
+   * untouched, but sharing `refresh` re-pointed the <video> src and re-ran the
+   * media load algorithm, which resets position to 0 and playbackRate to 1x
+   * mid-playback. Only the edit jobs actually rewrite the file.
+   */
+  const [mediaRefresh, setMediaRefresh] = useState(0);
   const [runningJob, setRunningJob] = useState<{ kind: string; pct: number; note?: string } | null>(null);
   const [chapterDraft, setChapterDraft] = useState<{ index: number; title: string } | null>(null);
   const [taskDraft, setTaskDraft] = useState<{ index: number; text: string } | null>(null);
@@ -129,6 +145,8 @@ export function WatchView({
   const [youtubeOpen, setYoutubeOpen] = useState(false);
   const [youtubeConnected, setYoutubeConnected] = useState<boolean | null>(null);
   const [youtubePublishing, setYoutubePublishing] = useState(false);
+  /** 0..99 while the upload runs, null when idle (progress arrives on the job channel). */
+  const [youtubePct, setYoutubePct] = useState<number | null>(null);
   const [youtubeError, setYoutubeError] = useState<string | null>(null);
 
   // A recording that just landed opens straight into the publish flow: the
@@ -151,7 +169,7 @@ export function WatchView({
     return () => window.removeEventListener('focus', refreshStatus);
   }, [youtubeOpen, meta?.youtubeUrl]);
 
-  const videoUrl = `${window.openloom.fileUrl(id, 'video.mp4')}?v=${refresh}`;
+  const videoUrl = `${window.openloom.fileUrl(id, 'video.mp4')}?v=${mediaRefresh}`;
   const vttUrl = `${window.openloom.fileUrl(id, 'transcript.vtt')}?v=${refresh}`;
   const posterUrl = `${window.openloom.fileUrl(id, 'thumb.jpg')}?v=${refresh}`;
 
@@ -188,10 +206,18 @@ export function WatchView({
         }
         return;
       }
+      // The YouTube upload owns its own bar inside the publish panel, so it does
+      // not go through runningJob (which the editor/transcribe strip renders).
+      if (j.kind === 'youtube') {
+        setYoutubePct(j.pct >= 100 ? null : j.pct);
+        return;
+      }
       if (!['transcribe', 'ai', 'trim', 'stitch', 'revert'].includes(j.kind)) return;
       if (j.pct >= 100) {
         setRunningJob(null);
         setRefresh((r) => r + 1);
+        // Only these rewrite video.mp4, so only these may reload the player.
+        if (['trim', 'stitch', 'revert'].includes(j.kind)) setMediaRefresh((r) => r + 1);
         void onChanged();
       } else {
         setRunningJob({ kind: j.kind, pct: j.pct, note: j.note });
@@ -236,6 +262,7 @@ export function WatchView({
     void window.openloom.youtubePublish(id).then(
       (res) => {
         setYoutubePublishing(false);
+        setYoutubePct(null);
         window.openloom.copyToClipboard(res.url);
         if (res.privacy === 'unlisted') {
           push('success', 'Published to YouTube as unlisted. Link copied.');
@@ -247,6 +274,7 @@ export function WatchView({
       },
       (err) => {
         setYoutubePublishing(false);
+        setYoutubePct(null);
         setYoutubeError(cleanIpcError(err));
       }
     );
@@ -334,7 +362,9 @@ export function WatchView({
       v.volume = volume;
       v.muted = muted;
     }
-  }, [speed, volume, muted]);
+    // mediaRefresh: an edit job reloads the element, and the media load algorithm
+    // resets playbackRate to 1x, so these have to be re-applied afterwards.
+  }, [speed, volume, muted, mediaRefresh]);
 
   const toggleFullscreen = async () => {
     const el = playerRef.current;
@@ -792,7 +822,19 @@ export function WatchView({
                       </div>
                     </>
                   ) : youtubePublishing ? (
-                    <p className="side-note">Uploading to YouTube… this takes a few seconds.</p>
+                    <div className="side-progress" role="status">
+                      <span className="spinner" aria-hidden="true" />
+                      <span>
+                        {youtubePct === null
+                          ? 'Starting the upload…'
+                          : youtubePct >= 99
+                            ? 'Uploaded. YouTube is processing it…'
+                            : `Uploading to YouTube… ${youtubePct}%`}
+                      </span>
+                      <div className="job-bar">
+                        <div className="job-bar-fill" style={{ width: `${youtubePct ?? 0}%` }} />
+                      </div>
+                    </div>
                   ) : youtubeConnected === false ? (
                     <>
                       <p className="side-note">
@@ -946,9 +988,15 @@ export function WatchView({
               <button
                 type="button"
                 className="btn-danger-quiet"
-                onClick={() =>
-                  void window.openloom.deleteVideo(id).then(onDeleted, (err) => push('error', cleanIpcError(err)))
-                }
+                onClick={() => {
+                  // The Library's delete confirms; this one fired on a single
+                  // click. Same destructive action, so it asks the same way.
+                  const shared = meta?.share ? ' Its shared link will stop working.' : '';
+                  if (!window.confirm(`Delete "${meta?.title ?? 'this recording'}"?${shared}`)) return;
+                  void window.openloom
+                    .deleteVideo(id)
+                    .then(onDeleted, (err) => push('error', cleanIpcError(err)));
+                }}
               >
                 <Icon.Trash width={15} height={15} />
                 Delete video

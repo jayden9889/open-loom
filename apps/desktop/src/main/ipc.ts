@@ -78,7 +78,18 @@ export function registerIpc(): void {
   handle('ol:listVideos', () => library().list());
   handle('ol:getVideo', (_e, id: string) => library().get(id));
   handle('ol:updateVideo', (_e, id: string, patch) => library().update(id, patch));
-  handle('ol:deleteVideo', (_e, id: string) => library().delete(id));
+  handle('ol:deleteVideo', async (_e, id: string) => {
+    // The delete confirmation promises the shared copy goes too. Local-only
+    // deletion left the public link live forever with no UI left to revoke it,
+    // because the recording it hung off no longer existed. Best-effort: a
+    // remote that cannot be reached must not strand the local delete.
+    try {
+      if (library().get(id).share) await unshareVideo(id);
+    } catch (err) {
+      log.warn(`could not remove the shared copy of ${id} before deleting: ${String(err)}`);
+    }
+    library().delete(id);
+  });
   handle('ol:duplicateVideo', (_e, id: string) => library().duplicate(id));
   ipcMain.on('ol:revealVideo', (_e, id: string) => revealVideo(id));
   handle('ol:listFolders', () => library().listFolders());
