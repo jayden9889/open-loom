@@ -269,8 +269,8 @@ describe('resumable upload chunking', () => {
 
 describe('parseOwnChannel', () => {
   it('extracts the channel id and title from a channels.list?mine=true response', () => {
-    const json = { items: [{ id: 'UCabc123', snippet: { title: 'Jayden Mortimer' } }] };
-    expect(parseOwnChannel(json)).toEqual({ id: 'UCabc123', title: 'Jayden Mortimer' });
+    const json = { items: [{ id: 'UCabc123', snippet: { title: 'Sample Creator' } }] };
+    expect(parseOwnChannel(json)).toEqual({ id: 'UCabc123', title: 'Sample Creator' });
   });
   it('returns null when the account has no channel (empty items)', () => {
     expect(parseOwnChannel({ items: [] })).toBeNull();
