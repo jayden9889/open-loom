@@ -3,6 +3,16 @@
 Deviations from SPEC.md and notable build-time decisions land here, newest first.
 Format: date · decision · why.
 
+- 2026-07-29 · Relicensed from plain MIT to MIT + Commons Clause, copyright Jayden Mortimer
+  (supersedes the SPEC section "License: MIT"). The Commons Clause removes only the right to Sell:
+  using, modifying, sharing and running Open Loom - personally or at work - stays free; selling the
+  app, or a product/service whose value is substantially Open Loom, is not granted. This makes the
+  repo source-available rather than OSI open source, and every MIT/open-source claim in README,
+  SPEC, CONTRIBUTING, package.json manifests, the in-app About note and the GitHub description was
+  updated to match. Versions v0.1.1 and earlier shipped under plain MIT and remain MIT - a licence
+  change cannot be applied retroactively to copies already distributed; the LICENSE file states
+  this split explicitly. Sole-author relicensing is clean: every commit to date is by the Licensor.
+
 - 2026-07-29 · Editor timeline reworked so cutting actually works, plus one-click silence removal
   (additive to SPEC E1-E4). The segment overlays used to swallow timeline clicks and snap the
   playhead to the segment START, so the playhead could never be placed by clicking - which made

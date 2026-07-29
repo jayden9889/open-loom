@@ -5,7 +5,7 @@
 <h1 align="center">Open Loom</h1>
 
 <p align="center">
-  A local-first, open-source screen recorder with Loom-style sharing that runs on storage you own.
+  A local-first, source-available screen recorder with Loom-style sharing that runs on storage you own.
 </p>
 
 <p align="center">
@@ -19,7 +19,7 @@
 
 <p align="center">
   <a href="https://github.com/jayden9889/open-loom/actions/workflows/ci.yml"><img src="https://github.com/jayden9889/open-loom/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <img src="https://img.shields.io/badge/license-MIT-635BFF" alt="MIT licence">
+  <img src="https://img.shields.io/badge/license-MIT%20%2B%20Commons%20Clause-635BFF" alt="MIT + Commons Clause licence">
   <img src="https://img.shields.io/badge/platform-macOS%2013%2B-635BFF" alt="Platform">
 </p>
 
@@ -28,7 +28,7 @@
 Record your screen with your camera, or just your camera. Everything lands as a plain, seekable MP4
 in a library on your own disk. When you want to send a link, share through a share server you run yourself (hosted watch
 page with comments, reactions and viewer analytics) or any S3-compatible bucket. No accounts, no
-telemetry, no vendor lock. MIT licensed.
+telemetry, no vendor lock. Free to use and modify; not for sale by anyone (MIT + Commons Clause).
 
 <p align="center">
   <img src="docs/media/watch.png" alt="Open Loom watch view" width="49%">
@@ -278,8 +278,11 @@ full tree is in [SPEC.md](SPEC.md) section 2.
 Open Loom re-implements the Loom product experience openly. No Loom code, assets or branding are
 copied. It also stands on the shoulders of earlier open-source recorders as prior art: Cap
 (Tauri and Rust, AGPL, source of the instant-share idea), Screenity (a GPL browser extension), and
-OpenScreen (MIT, archived). Open Loom is original, MIT-licensed code.
+OpenScreen (MIT, archived). Open Loom is original code.
 
 ## Licence
 
-MIT. See [LICENSE](LICENSE).
+MIT with the Commons Clause condition, copyright Jayden Mortimer. In plain words: use it, modify
+it, share it, run it at work - all free. What nobody may do is sell Open Loom itself or charge for
+a product or service whose value is substantially Open Loom. Versions v0.1.1 and earlier were
+published under plain MIT and remain so. See [LICENSE](LICENSE).

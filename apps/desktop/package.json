@@ -3,7 +3,7 @@
   "productName": "OpenLoom",
   "version": "0.1.1",
   "private": true,
-  "license": "MIT",
+  "license": "SEE LICENSE IN LICENSE",
   "description": "Open Loom desktop app: local-first screen recorder with Loom-parity UX.",
   "type": "module",
   "main": "out/main/index.js",

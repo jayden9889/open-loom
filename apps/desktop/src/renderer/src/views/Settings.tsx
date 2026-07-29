@@ -1126,7 +1126,7 @@ export function SettingsView({
                   <p>
                     Version {info?.version ?? ''} · {info?.platform ?? ''} {info?.osVersion ?? ''}
                   </p>
-                  <p className="settings-note">Open-source, local-first screen recording. MIT licensed.</p>
+                  <p className="settings-note">Source-available, local-first screen recording. MIT + Commons Clause.</p>
                 </div>
               </div>
               <Row label="ffmpeg" note={perms?.ffmpeg ? 'Found and working.' : 'Not found. Recordings cannot be processed without it.'}>

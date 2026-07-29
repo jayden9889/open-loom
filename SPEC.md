@@ -27,7 +27,7 @@ require a written note in `docs/DECISIONS.md`.
 | AI features | BYO provider: **Anthropic API**, **OpenAI-compatible**, or **Ollama** (local). Generates title, summary, chapters, action items from transcript. Keys via Electron `safeStorage`, never in repo | Loom AI parity without shipping secrets. |
 | Sharing default | Provider adapter. Providers: `openloom-server` (full loop), `s3` (R2/B2/MinIO/AWS, static share page), `none` (local only). Share URL is **minted and copied to clipboard the moment recording stops**; upload runs in background with progress + retry (Loom's "instant link" trick) | YouTube API is DEAD as default: unverified-project uploads are force-locked private (no appeal) + ~100 uploads/day/project. Drive locks popular files for 24h. R2 egress is free. |
 | Server | `packages/server`: **Hono + better-sqlite3**, single Docker container (or run from source), API-key auth for the creator app, anonymous viewers | The full Loom loop (comments/reactions/analytics) needs a write path; keep it tiny and one-command. |
-| License | **MIT** for everything in this repo | Max adoption; we bundle no GPL binaries. |
+| License | **MIT + Commons Clause** (source-available: free to use/modify/share, not for sale; plain MIT up to v0.1.1 - see LICENSE and docs/DECISIONS.md) | Wide adoption while nobody can sell the app itself; we bundle no GPL binaries. |
 | Platforms | macOS 14.2+ first-class (dev machine = macOS 26). Windows/Linux: code paths kept portable (no hard mac-only APIs without guards), but v1 is only *tested* on macOS | Honest scope. |
 
 **Naming:** product “Open Loom”, binary/app `OpenLoom`, bundle id `org.openloom.app`, server package `openloom-server`.
@@ -245,4 +245,4 @@ Viewer (anonymous): `GET /v/:id` (+`?embed=1`); `GET /v/:id/stream` (range); `PO
 - **Repo hygiene test:** `git grep` gate for secrets/tokens/absolute local paths/internal author or company references; `npm run lint` + `tsc --noEmit` clean; fresh `npm ci && npm run build` green; README instructions actually work start-to-finish.
 
 ## 8. Credits & prior art (for README)
-Loom (the product we re-implement openly — no code, assets, or branding copied), Cap (Tauri/Rust, AGPL — architectural inspiration incl. instant-mode), Screenity (GPL extension), OpenScreen (MIT, archived). Open Loom is original MIT code.
+Loom (the product we re-implement openly — no code, assets, or branding copied), Cap (Tauri/Rust, AGPL — architectural inspiration incl. instant-mode), Screenity (GPL extension), OpenScreen (MIT, archived). Open Loom is original code.
