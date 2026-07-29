@@ -5,6 +5,11 @@
  * runs the ffmpeg edit jobs (lossless cut vs precise re-encode chosen
  * automatically and surfaced in the progress note). The original stays banked
  * as video.orig.mp4 until the user keeps or reverts the edit.
+ *
+ * Timeline model: click or drag anywhere scrubs the playhead and selects the
+ * section under it; Split cuts at the playhead; Remove/Restore act on the
+ * selection; Cut quiet parts marks detected silences as removed. Everything is
+ * non-destructive until Save, and every change can be undone (Cmd/Ctrl+Z).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { JobProgress, VideoMeta } from '@shared/types';
@@ -60,6 +65,56 @@ export function mergeAdjacent(segs: Seg[]): Seg[] {
   return out;
 }
 
+/** Breathing room kept around speech when cutting a quiet stretch, so words are not clipped. */
+export const SILENCE_PAD = 0.18;
+/** A quiet stretch must still be at least this long after padding to be worth cutting. */
+export const MIN_SILENCE_CUT = 0.4;
+
+/**
+ * Mark detected quiet stretches as removed sections, shrunk by SILENCE_PAD on
+ * both sides. Only kept parts are touched, so existing cuts survive, and the
+ * whole edit is refused when it would leave less than a second of video.
+ */
+export function cutQuietParts(
+  segs: Seg[],
+  silences: { start: number; end: number }[]
+): { segs: Seg[]; cutCount: number; removedSec: number } {
+  let out = segs.map((s) => ({ ...s }));
+  let cutCount = 0;
+  for (const sil of silences) {
+    const start = sil.start + SILENCE_PAD;
+    const end = sil.end - SILENCE_PAD;
+    if (end - start < MIN_SILENCE_CUT) continue;
+    const next: Seg[] = [];
+    let cutThis = false;
+    for (const s of out) {
+      if (!s.kept || s.end <= start || s.start >= end) {
+        next.push(s);
+        continue;
+      }
+      const a = Math.max(s.start, start);
+      const b = Math.min(s.end, end);
+      if (b - a < 0.01) {
+        next.push(s);
+        continue;
+      }
+      cutThis = true;
+      if (a - s.start > 0.001) next.push({ start: s.start, end: a, kept: true });
+      next.push({ start: a, end: b, kept: false });
+      if (s.end - b > 0.001) next.push({ start: b, end: s.end, kept: true });
+    }
+    if (cutThis) {
+      cutCount++;
+      out = next;
+    }
+  }
+  out = mergeAdjacent(out);
+  if (cutCount === 0 || totalKept(out) < 1) {
+    return { segs, cutCount: 0, removedSec: 0 };
+  }
+  return { segs: out, cutCount, removedSec: totalKept(segs) - totalKept(out) };
+}
+
 const FILMSTRIP_FRAMES = 14;
 
 export function EditorView({
@@ -86,6 +141,8 @@ export function EditorView({
   const [savedBanner, setSavedBanner] = useState(false);
   const [videoError, setVideoError] = useState<string | null>(null);
   const [videoReady, setVideoReady] = useState(false);
+  const [history, setHistory] = useState<Seg[][]>([]);
+  const [detecting, setDetecting] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
@@ -112,6 +169,7 @@ export function EditorView({
   const resetSegs = useCallback((dur: number) => {
     setSegs([{ start: 0, end: dur, kept: true }]);
     setSelected(null);
+    setHistory([]);
   }, []);
 
   const loadMeta = useCallback(async () => {
@@ -292,12 +350,25 @@ export function EditorView({
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return;
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        undo();
+        return;
+      }
       if (e.key === ' ') {
         e.preventDefault();
         togglePlay();
       }
       if (e.key === 's' || e.key === 'S') splitAtPlayhead();
-      if ((e.key === 'Backspace' || e.key === 'Delete') && selected !== null) removeSegment(selected);
+      if ((e.key === 'Backspace' || e.key === 'Delete') && selected !== null) {
+        if (segs[selected]?.kept) removeSegment(selected);
+        else restoreSegment(selected);
+      }
+      // Nudge the playhead for precise cuts; trim handles keep their own arrows.
+      if (!target.closest?.('.tl-handle')) {
+        if (e.key === 'ArrowLeft') seek(current - (e.shiftKey ? 1 : 0.1));
+        if (e.key === 'ArrowRight') seek(current + (e.shiftKey ? 1 : 0.1));
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -305,39 +376,69 @@ export function EditorView({
 
   // --- segment operations ---------------------------------------------------
 
+  /** Apply a new segment layout, remembering the old one for undo. */
+  const applySegs = (next: Seg[]) => {
+    setHistory((h) => [...h.slice(-49), segs]);
+    setSegs(next);
+    setSelected(null);
+  };
+
+  const undo = useCallback(() => {
+    setHistory((h) => {
+      const prev = h[h.length - 1];
+      if (prev) {
+        setSegs(prev);
+        setSelected(null);
+      }
+      return h.slice(0, -1);
+    });
+  }, []);
+
   const splitAtPlayhead = () => {
     const t = videoRef.current?.currentTime ?? current;
-    setSegs((prev) => {
-      const idx = prev.findIndex((s) => t > s.start + MIN_SEG && t < s.end - MIN_SEG);
-      if (idx < 0) return prev;
-      const s = prev[idx]!;
-      const next = [...prev];
-      next.splice(idx, 1, { start: s.start, end: t, kept: s.kept }, { start: t, end: s.end, kept: s.kept });
-      return next;
-    });
-    setSelected(null);
+    const idx = segs.findIndex((s) => t > s.start + MIN_SEG && t < s.end - MIN_SEG);
+    if (idx < 0) return;
+    const s = segs[idx]!;
+    const next = [...segs];
+    next.splice(idx, 1, { start: s.start, end: t, kept: s.kept }, { start: t, end: s.end, kept: s.kept });
+    applySegs(next);
   };
 
   const removeSegment = (i: number) => {
-    setSegs((prev) => {
-      if (!prev[i]) return prev;
-      if (mergeKept(prev).length === 1 && prev.filter((s) => s.kept).length === 1) {
-        push('error', 'At least one section must remain.');
-        return prev;
-      }
-      const next = prev.map((s, idx) => (idx === i ? { ...s, kept: false } : s));
-      if (totalKept(next) < MIN_SEG) {
-        push('error', 'At least one section must remain.');
-        return prev;
-      }
-      return next;
-    });
-    setSelected(null);
+    if (!segs[i]) return;
+    const next = segs.map((s, idx) => (idx === i ? { ...s, kept: false } : s));
+    if (totalKept(next) < MIN_SEG) {
+      push('error', 'At least one section must remain.');
+      return;
+    }
+    applySegs(next);
   };
 
   const restoreSegment = (i: number) => {
-    setSegs((prev) => prev.map((s, idx) => (idx === i ? { ...s, kept: true } : s)));
-    setSelected(null);
+    applySegs(segs.map((s, idx) => (idx === i ? { ...s, kept: true } : s)));
+  };
+
+  /** Detect silences in the audio and mark them as removed sections (non-destructive). */
+  const cutSilences = async () => {
+    if (detecting || busy) return;
+    setDetecting(true);
+    try {
+      const silences = await window.openloom.detectSilences(id);
+      const result = cutQuietParts(segs, silences);
+      if (result.cutCount === 0) {
+        push('info', 'No quiet parts found. Nothing was cut.');
+        return;
+      }
+      applySegs(result.segs);
+      push(
+        'success',
+        `Cut ${result.cutCount} quiet ${result.cutCount === 1 ? 'part' : 'parts'} - ${formatDuration(result.removedSec)} shorter. Check the preview, then save.`
+      );
+    } catch (err) {
+      push('error', cleanIpcError(err));
+    } finally {
+      setDetecting(false);
+    }
   };
 
   /**
@@ -395,11 +496,35 @@ export function EditorView({
   const dragHandle = (edge: 'in' | 'out') => (downEvent: React.PointerEvent) => {
     downEvent.preventDefault();
     downEvent.stopPropagation();
+    // One undo step per drag, not per pointer move.
+    setHistory((h) => [...h.slice(-49), segs]);
     const move = (e: PointerEvent) => {
       const t = timeAtClientX(e.clientX);
       applyTrim(edge, t);
       seek(t);
     };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+
+  /**
+   * Click or drag anywhere on the timeline to scrub. The section under the
+   * pointer becomes the selection, so cut-then-remove is: click, S, click, Remove.
+   */
+  const scrubTimeline = (downEvent: React.PointerEvent) => {
+    if ((downEvent.target as HTMLElement).closest('.tl-handle')) return;
+    const selectAt = (clientX: number) => {
+      const t = timeAtClientX(clientX);
+      seek(t);
+      const idx = segs.findIndex((s) => t >= s.start && t < s.end);
+      setSelected(idx >= 0 ? idx : null);
+    };
+    selectAt(downEvent.clientX);
+    const move = (e: PointerEvent) => selectAt(e.clientX);
     const up = () => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
@@ -598,24 +723,56 @@ export function EditorView({
         <span className="time-display">
           {formatDuration(current)} <span className="time-sep">/</span> {formatDuration(duration)}
         </span>
+        <button
+          type="button"
+          className="icon-btn"
+          aria-label="Undo the last edit step"
+          title="Undo (Cmd+Z)"
+          disabled={history.length === 0 || busy}
+          onClick={undo}
+        >
+          <Icon.Undo width={15} height={15} />
+        </button>
         <div className="controls-spacer" />
         <span className="editor-result-len" title="Length after this edit">
           Result: {formatDuration(totalKept(segs))}
         </span>
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={() => void cutSilences()}
+          disabled={detecting || busy}
+          title="Find silent stretches and cut them all out in one go"
+        >
+          <Icon.VolumeMute width={15} height={15} />
+          {detecting ? 'Listening…' : 'Remove quiet parts'}
+        </button>
         <button type="button" className="btn-secondary" onClick={splitAtPlayhead} title="Split at the playhead (S)">
           <Icon.Split width={15} height={15} />
           Split
         </button>
-        <button
-          type="button"
-          className="btn-danger-quiet"
-          disabled={selected === null || !segs[selected]?.kept}
-          onClick={() => selected !== null && removeSegment(selected)}
-          title="Remove the selected section (Delete)"
-        >
-          <Icon.Trash width={15} height={15} />
-          Remove section
-        </button>
+        {selected !== null && segs[selected] && !segs[selected]!.kept ? (
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => restoreSegment(selected)}
+            title="Bring the selected section back (Delete)"
+          >
+            <Icon.Undo width={15} height={15} />
+            Restore section
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="btn-danger-quiet"
+            disabled={selected === null || !segs[selected]?.kept}
+            onClick={() => selected !== null && removeSegment(selected)}
+            title="Remove the selected section (Delete)"
+          >
+            <Icon.Trash width={15} height={15} />
+            Remove section
+          </button>
+        )}
       </div>
 
       <div
@@ -623,10 +780,7 @@ export function EditorView({
         ref={timelineRef}
         role="group"
         aria-label="Edit timeline"
-        onPointerDown={(e) => {
-          if ((e.target as HTMLElement).closest('.tl-handle')) return;
-          seek(timeAtClientX(e.clientX));
-        }}
+        onPointerDown={scrubTimeline}
       >
         <div className="filmstrip" aria-hidden="true">
           {Array.from({ length: FILMSTRIP_FRAMES }, (_, i) => (
@@ -638,25 +792,18 @@ export function EditorView({
         <canvas ref={waveRef} className="wave-canvas" aria-hidden="true" />
         {peaks.length === 0 && <span className="wave-none">No audio track</span>}
 
-        {/* removed/kept shading + click targets */}
-        <div className="tl-segments">
+        {/* removed/kept shading; all pointer handling lives on the timeline itself */}
+        <div className="tl-segments" aria-hidden="true">
           {segs.map((s, i) => (
-            <button
+            <div
               key={`${s.start.toFixed(3)}-${s.end.toFixed(3)}`}
-              type="button"
               className={`tl-seg${s.kept ? '' : ' removed'}${selected === i ? ' selected' : ''}`}
               style={{ left: pct(s.start), width: pct(s.end - s.start) }}
               title={
                 s.kept
-                  ? `Kept ${formatDuration(s.start)} to ${formatDuration(s.end)}. Click to select.`
-                  : `Removed ${formatDuration(s.start)} to ${formatDuration(s.end)}. Click to restore.`
+                  ? `Kept ${formatDuration(s.start)} to ${formatDuration(s.end)}.`
+                  : `Removed ${formatDuration(s.start)} to ${formatDuration(s.end)}. Click it, then Restore section.`
               }
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => {
-                if (!s.kept) restoreSegment(i);
-                else setSelected(selected === i ? null : i);
-                seek(s.start + 0.01);
-              }}
             />
           ))}
         </div>
@@ -704,8 +851,9 @@ export function EditorView({
       </div>
 
       <p className="editor-hint">
-        Drag the handles to trim. Press S to split at the playhead, select a middle section and remove it. Removed
-        parts are skipped in the preview and only applied when you save.
+        Click anywhere on the timeline to move the playhead (arrow keys nudge it). Press S to split there, then
+        Remove the part you do not want - click a removed part to bring it back with Restore. Drag the handles to
+        trim the ends. Nothing touches the file until you press Save, and Cmd+Z undoes any step.
       </p>
 
       {(busy || job) && (

@@ -501,6 +501,8 @@ export interface OpenLoomAPI {
   // editor
   trimVideo(id: string, ranges: { start: number; end: number }[]): Promise<void>;
   stitchVideos(id: string, appendId: string): Promise<void>;
+  /** Quiet stretches in the current file, for the cut-quiet-parts action (additive; see docs/DECISIONS.md). */
+  detectSilences(id: string): Promise<{ start: number; end: number }[]>;
   onJobProgress(cb: (j: JobProgress) => void): () => void;
 
   // transcribe + AI

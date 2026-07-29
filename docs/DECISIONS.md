@@ -3,6 +3,18 @@
 Deviations from SPEC.md and notable build-time decisions land here, newest first.
 Format: date · decision · why.
 
+- 2026-07-29 · Editor timeline reworked so cutting actually works, plus one-click silence removal
+  (additive to SPEC E1-E4). The segment overlays used to swallow timeline clicks and snap the
+  playhead to the segment START, so the playhead could never be placed by clicking - which made
+  Split-at-playhead effectively unusable. Now all pointer handling lives on the timeline itself:
+  click or drag scrubs, the section under the pointer becomes the selection, Remove/Restore are
+  contextual toolbar actions, arrow keys nudge the playhead (Shift for 1s), and every step is
+  undoable (Cmd/Ctrl+Z, 50-step history). New "Remove quiet parts" runs ffmpeg silencedetect in
+  the main process (`OpenLoomAPI.detectSilences`, additive IPC `ol:detectSilences`) and marks
+  padded silences (0.18s breathing room, stretches under 0.4s skipped) as removed sections -
+  non-destructive until Save, refused entirely if it would leave under a second of video.
+  Live-path e2e: e2e/editor.spec.ts (seeded tone-silence-tone video, ffprobe-verified save).
+
 - 2026-07-24 · Publish to YouTube is now a real Data API upload, replacing the guided-manual flow
   (S7, 2026-07-08 → 2026-07-13). One click uploads the recording's `video.mp4` to the user's own
   channel via the resumable `videos.insert` endpoint and hands back the watch link - no more

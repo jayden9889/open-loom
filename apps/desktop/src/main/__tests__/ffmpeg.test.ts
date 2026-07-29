@@ -9,7 +9,9 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   canRemux,
+  detectSilences,
   gifPreview,
+  parseSilenceLines,
   probe,
   remux,
   resolveBinaries,
@@ -137,5 +139,68 @@ describe('waveformPeaks', () => {
     const out = path.join(work, 'silent-waveform.json');
     const data = await waveformPeaks(bins, silent, out);
     expect(data.peaks).toEqual([]);
+  });
+});
+
+describe('parseSilenceLines', () => {
+  it('pairs silence_start/silence_end lines into ranges', () => {
+    const lines = [
+      '[silencedetect @ 0x600] silence_start: 1.5',
+      '[silencedetect @ 0x600] silence_end: 3.25 | silence_duration: 1.75',
+      '[silencedetect @ 0x600] silence_start: 8',
+      '[silencedetect @ 0x600] silence_end: 9.5 | silence_duration: 1.5',
+    ];
+    expect(parseSilenceLines(lines, 12)).toEqual([
+      { start: 1.5, end: 3.25 },
+      { start: 8, end: 9.5 },
+    ]);
+  });
+
+  it('closes a trailing silence at the duration and clamps negative starts', () => {
+    const lines = [
+      '[silencedetect @ 0x600] silence_start: -0.02',
+      '[silencedetect @ 0x600] silence_end: 1 | silence_duration: 1.02',
+      '[silencedetect @ 0x600] silence_start: 9.1',
+    ];
+    expect(parseSilenceLines(lines, 10)).toEqual([
+      { start: 0, end: 1 },
+      { start: 9.1, end: 10 },
+    ]);
+  });
+
+  it('ignores an end without a start and returns nothing for clean audio', () => {
+    expect(parseSilenceLines(['silence_end: 4'], 10)).toEqual([]);
+    expect(parseSilenceLines(['frame=  100 fps=0.0'], 10)).toEqual([]);
+  });
+});
+
+describe('detectSilences', () => {
+  it('finds the silent middle of a tone-silence-tone video', async () => {
+    const gapped = path.join(work, 'gapped.mp4');
+    // 2s tone, 2s silence, 2s tone under a test pattern.
+    execFileSync(bins.ffmpeg, [
+      '-y', '-hide_banner', '-loglevel', 'error',
+      '-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=10:duration=6',
+      '-f', 'lavfi', '-i',
+      'sine=frequency=440:duration=2,apad=pad_dur=2 [a1]; sine=frequency=440:duration=2 [a2]; [a1][a2] concat=n=2:v=0:a=1',
+      '-map', '0:v', '-map', '1:a',
+      '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', gapped,
+    ]);
+    const silences = await detectSilences(bins, gapped);
+    expect(silences.length).toBe(1);
+    expect(silences[0]!.start).toBeGreaterThan(1.5);
+    expect(silences[0]!.start).toBeLessThan(2.5);
+    expect(silences[0]!.end).toBeGreaterThan(3.5);
+    expect(silences[0]!.end).toBeLessThan(4.5);
+  });
+
+  it('returns no silences for a video without audio', async () => {
+    const noAudio = path.join(work, 'no-audio.mp4');
+    execFileSync(bins.ffmpeg, [
+      '-y', '-hide_banner', '-loglevel', 'error',
+      '-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=10:duration=1',
+      '-c:v', 'libx264', '-pix_fmt', 'yuv420p', noAudio,
+    ]);
+    expect(await detectSilences(bins, noAudio)).toEqual([]);
   });
 });

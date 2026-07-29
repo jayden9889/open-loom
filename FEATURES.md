@@ -54,6 +54,7 @@ noted where one exists.
 | Custom thumbnail | Business+ | ✅ v1 |
 | Trim (waveform editor) | Business+ | ✅ v1 |
 | Split & delete middle sections | Business+ | ✅ v1 |
+| Remove silences in one click | n/a (Loom lacks it) | ✅ v1 (ffmpeg silencedetect, non-destructive) |
 | Stitch clips together | Business+ | ✅ v1 |
 | Edit by transcript | Business+AI | 🔜 roadmap |
 | Text/arrow overlays post-record | Business+AI | 🔜 roadmap |

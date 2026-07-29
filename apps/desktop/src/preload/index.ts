@@ -76,6 +76,7 @@ const api: OpenLoomAPI = {
   trimVideo: (id: string, ranges: { start: number; end: number }[]) =>
     ipcRenderer.invoke('ol:trimVideo', id, ranges),
   stitchVideos: (id: string, appendId: string) => ipcRenderer.invoke('ol:stitchVideos', id, appendId),
+  detectSilences: (id: string) => ipcRenderer.invoke('ol:detectSilences', id),
   onJobProgress: subscribe<JobProgress>('ol:job-progress'),
 
   // transcribe + AI

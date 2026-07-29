@@ -13,8 +13,8 @@ import { getSettings, appBinDir } from './settings';
 import { log } from './logger';
 import { broadcast } from './windows';
 
-export { probe, remux, transcodeH264, thumbnail, gifPreview, waveformPeaks, canRemux, extractAudioWav } from './ffmpeg-core';
-export type { FfmpegBinaries, ProbeResult } from './ffmpeg-core';
+export { probe, remux, transcodeH264, thumbnail, gifPreview, waveformPeaks, canRemux, extractAudioWav, detectSilences } from './ffmpeg-core';
+export type { FfmpegBinaries, ProbeResult, SilenceRange } from './ffmpeg-core';
 
 export function binaries(): core.FfmpegBinaries | null {
   return core.resolveBinaries(getSettings().ffmpegPath, appBinDir());

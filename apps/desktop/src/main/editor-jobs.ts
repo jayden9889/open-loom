@@ -120,6 +120,17 @@ async function refreshDerivedAssets(
 }
 
 /**
+ * Quiet stretches in the current (possibly already edited) file, for the
+ * editor's cut-quiet-parts action. Read-only, so it skips the job queue.
+ */
+export async function detectSilences(id: string): Promise<{ start: number; end: number }[]> {
+  library().get(id);
+  const input = requireVideoFile(id);
+  const bins = ffmpeg.requireBinaries();
+  return ffmpeg.detectSilences(bins, input);
+}
+
+/**
  * Keep-ranges trim (E1 + E2). Writes to a temp file first so a failed ffmpeg
  * run never destroys the current video.
  */

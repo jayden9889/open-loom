@@ -13,7 +13,7 @@ import { getSettingsMasked, setSettings, getSettings } from './settings';
 import { fetchFfmpeg } from './ffmpeg';
 import { validateShortcuts } from './shortcuts';
 import { broadcast, getMainWindow, showLauncher } from './windows';
-import { trimVideo, stitchVideos, revertEdits, confirmEdits } from './editor-jobs';
+import { trimVideo, stitchVideos, revertEdits, confirmEdits, detectSilences } from './editor-jobs';
 import { transcribeVideo, installWhisper } from './transcribe';
 import { generateAI, testAI } from './ai';
 import {
@@ -107,6 +107,7 @@ export function registerIpc(): void {
   handle('ol:stitchVideos', (_e, id: string, appendId: string) => stitchVideos(id, appendId));
   handle('ol:revertEdits', (_e, id: string) => revertEdits(id));
   handle('ol:confirmEdits', (_e, id: string) => confirmEdits(id));
+  handle('ol:detectSilences', (_e, id: string) => detectSilences(id));
 
   // -- transcription + AI --------------------------------------------------------
   handle('ol:transcribeVideo', (_e, id: string) => transcribeVideo(id));

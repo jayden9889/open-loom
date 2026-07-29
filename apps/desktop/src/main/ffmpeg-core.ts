@@ -300,6 +300,65 @@ export async function waveformPeaks(
   return data;
 }
 
+export interface SilenceRange {
+  start: number;
+  end: number;
+}
+
+/**
+ * Parse ffmpeg silencedetect stderr lines into ranges. A silence still open at
+ * the end of the stream (no silence_end line) is closed at `durationSec`.
+ * Exported for tests.
+ */
+export function parseSilenceLines(lines: string[], durationSec: number): SilenceRange[] {
+  const out: SilenceRange[] = [];
+  let openStart: number | null = null;
+  for (const line of lines) {
+    const start = /silence_start:\s*(-?[\d.]+)/.exec(line);
+    if (start) {
+      openStart = Number(start[1]);
+      continue;
+    }
+    const end = /silence_end:\s*(-?[\d.]+)/.exec(line);
+    if (end && openStart !== null) {
+      const s = Math.max(0, openStart);
+      const e = Number(end[1]);
+      if (e > s) out.push({ start: s, end: e });
+      openStart = null;
+    }
+  }
+  if (openStart !== null && durationSec > openStart) {
+    out.push({ start: Math.max(0, openStart), end: durationSec });
+  }
+  return out;
+}
+
+/**
+ * Detect quiet stretches with silencedetect (decodes audio only, so it is
+ * fast). Videos without an audio stream have no silences to report.
+ */
+export async function detectSilences(
+  bins: FfmpegBinaries,
+  input: string,
+  opts: { noiseDb?: number; minSilenceSec?: number } = {}
+): Promise<SilenceRange[]> {
+  const info = await probe(bins, input);
+  if (!info.audioCodec) return [];
+  const lines: string[] = [];
+  await run(
+    bins.ffmpeg,
+    [
+      '-hide_banner',
+      '-i', input,
+      '-vn',
+      '-af', `silencedetect=noise=${opts.noiseDb ?? -35}dB:d=${opts.minSilenceSec ?? 0.8}`,
+      '-f', 'null', '-',
+    ],
+    { onStderrLine: (line) => lines.push(line) }
+  );
+  return parseSilenceLines(lines, info.durationSec);
+}
+
 /** Extract mono 16kHz PCM WAV for transcription engines (SPEC T1). */
 export async function extractAudioWav(
   bins: FfmpegBinaries,
