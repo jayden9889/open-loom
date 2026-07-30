@@ -71,7 +71,8 @@ noted where one exists.
 | AI summaries | Business+AI | ✅ v1 (BYO key) |
 | AI chapters | Business+AI | ✅ v1 (BYO key) |
 | AI tasks / action items | Business+AI | ✅ v1 (BYO key) |
-| Filler word / silence removal | Business+AI | 🔜 roadmap |
+| Silence removal | Business+AI | ✅ v1 (one-click Remove quiet parts) |
+| Filler word ("um") removal | Business+AI | 🔜 roadmap |
 | AI workflows (video→doc, video→Jira) | Business+AI | ☁️ n/a |
 
 ## Sharing & engagement

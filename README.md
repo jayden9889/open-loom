@@ -57,7 +57,8 @@ An 80-second tour of installing, recording, your library, editing, transcription
   between **Full face** and **Screen** (screen with your camera bubble composited in). Pick a whole
   display or a single application window. Every recording includes your camera by design - if you
   want screen capture with no webcam, Open Loom is not the tool for you.
-- **Camera bubble.** Circular, draggable, three sizes, mirror toggle, hide or show mid-recording.
+- **Camera bubble.** Circular, draggable, three sizes, mirror toggle. In Screen mode a bottom-centre
+  slider flips the camera between **Full face** and **Face + screen** live, mid-recording.
 - **System audio.** Native loopback on macOS 14.2 and later, mixed with your microphone. No virtual
   driver.
 - **Recording controls.** Countdown, pause and resume, restart, cancel, an on-screen control bar,
@@ -114,6 +115,9 @@ Loom message, then confirm. macOS remembers the choice. (The older right-click >
 removed in macOS 15 Sequoia; on macOS 14 and earlier it still works.)
 
 It then lives in your menu bar and Dock. Intel Macs, Windows and Linux: build from source below.
+
+New here? The [Getting started guide](docs/GETTING-STARTED.md) walks through your first recording,
+connecting YouTube, editing, and sharing.
 
 ## Run from source
 
