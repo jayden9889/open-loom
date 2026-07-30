@@ -1,6 +1,7 @@
 # openloom-server: self-hosted share server for Open Loom.
 # Build:  docker build -t openloom-server .
-# Run:    docker run -d -p 3000:3000 -e API_KEY=change-me -v openloom-data:/data openloom-server
+# Run:    docker run -d -p 3000:3000 -e API_KEY="$(openssl rand -base64 24)" -v openloom-data:/data openloom-server
+#         (use a long random API_KEY - it is the only thing guarding read/write to every recording)
 
 FROM node:22-bookworm-slim AS build
 WORKDIR /app

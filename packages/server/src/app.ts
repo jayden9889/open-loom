@@ -19,6 +19,14 @@ import path from 'node:path';
 /** Viewer POST bodies (comment/reaction/beacon/unlock) are tiny; cap hard. */
 const VIEWER_BODY_LIMIT = 64 * 1024;
 
+/**
+ * Creator API bodies are either small JSON or one upload chunk. The desktop
+ * client streams files in 8 MiB chunks, so 16 MiB is generous headroom while
+ * still rejecting a multi-gigabyte PUT with 413 BEFORE the handler buffers it
+ * into memory (upload.ts reads the whole chunk via arrayBuffer()).
+ */
+const API_BODY_LIMIT = 16 * 1024 * 1024;
+
 export interface ServerApp {
   app: Hono;
   ctx: AppCtx;
@@ -34,6 +42,14 @@ export function createServerApp(cfg: ServerConfig): ServerApp {
   app.get('/', (c) => c.redirect('/healthz'));
 
   const api = new Hono();
+  // Reject an oversized creator body with 413 before any handler buffers it.
+  api.use(
+    '*',
+    bodyLimit({
+      maxSize: API_BODY_LIMIT,
+      onError: (c) => c.json({ error: 'That request body is too large.' }, 413),
+    })
+  );
   api.use('*', creatorAuth(ctx));
   api.route('/', videosRoutes(ctx));
   api.route('/', uploadRoutes(ctx));

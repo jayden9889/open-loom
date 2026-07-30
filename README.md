@@ -92,9 +92,20 @@ The full comparison with Loom, feature by feature, is in [FEATURES.md](FEATURES.
 
 ## Install the app
 
-The quickest way on an Apple Silicon Mac: download **`OpenLoom-0.1.1-arm64.dmg`** from the
+The quickest way on an Apple Silicon Mac: download **`OpenLoom-0.1.2-arm64.dmg`** from the
 [latest release](https://github.com/jayden9889/open-loom/releases/latest), drag Open Loom into
 Applications, then open it.
+
+**Verify the download first.** The build is ad-hoc signed, so the signature proves nothing about
+who made it. Every release ships a `SHA256SUMS.txt`; check the file you downloaded matches before
+you open it:
+
+```bash
+shasum -a 256 -c SHA256SUMS.txt   # run in the folder holding both files
+# OpenLoom-0.1.2-arm64.dmg: OK
+```
+
+If it does not say `OK`, do not open it - you have a tampered or corrupted copy.
 
 The build is ad-hoc signed but **not notarized**, so macOS will refuse it on first launch with
 "Apple could not verify Open Loom is free of malware". To allow it: open **System Settings >

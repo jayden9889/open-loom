@@ -50,6 +50,14 @@ describe('defaults + merge', () => {
     const next = mergeSettings(base, { theme: undefined });
     expect(next.theme).toBe('auto');
   });
+
+  it('does not let a patch pollute the prototype chain', () => {
+    const base = defaultSettings('/x');
+    const next = mergeSettings(base, JSON.parse('{"__proto__": {"polluted": true}}'));
+    expect(next).toBeDefined();
+    expect(({} as Record<string, unknown>)['polluted']).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(Object.prototype, 'polluted')).toBe(false);
+  });
 });
 
 describe('secrets', () => {

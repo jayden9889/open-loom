@@ -12,6 +12,10 @@ services:
       - BASE_URL=${BASE_URL:-http://localhost:3000}
       - MAX_UPLOAD_MB=${MAX_UPLOAD_MB:-2048}
       - CREATOR_NAME=${CREATOR_NAME:-}
+      # Set TRUST_PROXY=true ONLY when a reverse proxy (e.g. Caddy) sits in front,
+      # so per-IP rate limits key on the real client IP. Leaving it unset while
+      # behind a proxy collapses every viewer into one bucket (see SELF-HOSTING.md).
+      - TRUST_PROXY=${TRUST_PROXY:-}
     volumes:
       - openloom-data:/data
     restart: unless-stopped

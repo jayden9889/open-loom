@@ -4,6 +4,7 @@
  */
 import { BrowserWindow, screen, shell, type Display, type Rectangle } from 'electron';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { BUBBLE_SIZES, type BubbleSize, type CameraLayout } from '@shared/types';
 import { log } from './logger';
 
@@ -49,7 +50,23 @@ function appOrigin(): string | null {
   return 'file://';
 }
 
-/** True only for the app's own pages: the dev vite origin, or packaged file:// pages. */
+/** Packaged renderer directory - the ONLY file:// location the app may navigate to. */
+function rendererDir(): string {
+  return path.resolve(import.meta.dirname, '../renderer');
+}
+
+/** True when a resolved filesystem path sits inside `dir` (not just shares its prefix). */
+function isInside(dir: string, target: string): boolean {
+  const rel = path.relative(dir, target);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+/**
+ * True only for the app's own pages: the dev vite origin, or a packaged file://
+ * page that resolves INSIDE the renderer directory. A bare `file:` check is not
+ * enough - it would treat any local HTML (e.g. a file dropped on the window) as
+ * a trusted app page, letting it run with the full preload bridge and no CSP.
+ */
 function isAppUrl(target: string): boolean {
   let u: URL;
   try {
@@ -61,7 +78,12 @@ function isAppUrl(target: string): boolean {
     const origin = appOrigin();
     return origin !== null && u.origin === origin;
   }
-  return u.protocol === 'file:';
+  if (u.protocol !== 'file:') return false;
+  try {
+    return isInside(rendererDir(), path.resolve(fileURLToPath(u)));
+  } catch {
+    return false;
+  }
 }
 
 /**

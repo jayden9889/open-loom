@@ -225,3 +225,24 @@ describe('create-path password invariant', () => {
     expect((await srv.app.request(`/v/${id}`)).status).toBe(403);
   });
 });
+
+describe('creator API hardening', () => {
+  it('rejects an oversized creator body with 413 before the handler buffers it', async () => {
+    const srv = makeApp();
+    const res = await srv.app.request('/api/videos', {
+      method: 'POST',
+      headers: authJson,
+      // 20 MiB > the 16 MiB API cap; must 413 without OOMing the upload buffer.
+      body: JSON.stringify({ id: 'toobig12345', pad: 'x'.repeat(20 * 1024 * 1024) }),
+    });
+    expect(res.status).toBe(413);
+  });
+
+  it('refuses to start with a too-short API_KEY', () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ol-weakkey-'));
+    expect(() =>
+      loadConfig({ DATA_DIR: dataDir, API_KEY: 'change-me', BASE_URL: 'http://localhost:3000' } as NodeJS.ProcessEnv)
+    ).toThrow(/too short/i);
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+});

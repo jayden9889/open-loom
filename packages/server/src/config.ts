@@ -43,6 +43,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
 
   let apiKey = (env.API_KEY || '').trim();
   let apiKeyGenerated = false;
+  // A supplied key guards read/write to every recording, so refuse a weak one
+  // outright rather than let a "change-me"-class key ship to a public port.
+  if (apiKey && apiKey.length < 16) {
+    throw new Error(
+      `API_KEY is too short (${apiKey.length} chars). Use at least 16, e.g. API_KEY=$(openssl rand -base64 24). ` +
+        'Or unset it and the server will generate and store a strong key on first run.'
+    );
+  }
   if (!apiKey) {
     const keyFile = path.join(dataDir, 'api-key.txt');
     if (fs.existsSync(keyFile)) {

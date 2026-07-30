@@ -99,6 +99,8 @@ export function mergeSettings<T>(base: T, patch: unknown): T {
   const out: Record<string, unknown> = { ...base };
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) continue;
+    // Never let a patch key rewrite the prototype chain (prototype pollution).
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
     const existing = (base as Record<string, unknown>)[key];
     if (isPlainObject(existing) && isPlainObject(value)) {
       out[key] = mergeSettings(existing, value);

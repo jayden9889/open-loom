@@ -196,6 +196,14 @@ export async function updateShareSettings(id: string, patch: Partial<NonNullable
   }
   const { password, ...localPatch } = patch;
 
+  // A CTA button on the public watch page is a link; only http(s) may reach the
+  // rendered href. Blocks a `javascript:`/`data:` CTA becoming stored XSS on the
+  // viewer's share origin. `escapeHtml` in player-page stops attribute breakout;
+  // this stops the scheme itself.
+  if (localPatch.cta && !/^https?:\/\//i.test(localPatch.cta.url)) {
+    throw new Error('The call-to-action link must start with http:// or https://.');
+  }
+
   if (meta.share.provider === 'server') {
     const provider = currentProvider('server') as ServerShareProvider;
     const remotePatch: ServerVideoPatch = {};

@@ -172,3 +172,22 @@ const internal: OpenLoomInternal = {
 
 contextBridge.exposeInMainWorld('openloom', api);
 contextBridge.exposeInMainWorld('openloomInternal', internal);
+
+/**
+ * Drag-and-drop guard. A file dropped on a page with no drop handler makes
+ * Chromium navigate the top frame to that file - which for a screen recorder is
+ * a plausible mistake (users try to drag media in) and, worse, an attack vector:
+ * the dropped document would run with this very preload bridge. Open Loom has no
+ * drag-import UI, so we swallow every drag/drop at the window before Chromium can
+ * act on it. Runs in every window because they all share this preload.
+ */
+for (const type of ['dragover', 'drop'] as const) {
+  window.addEventListener(
+    type,
+    (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    },
+    false
+  );
+}

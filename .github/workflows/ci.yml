@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+# Least privilege: this workflow only reads the checkout. Declaring it here (not
+# just relying on the repo-wide default) means a fork PR's GITHUB_TOKEN stays
+# read-only even if the org/repo default is later flipped to write.
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
     name: Typecheck, build, test

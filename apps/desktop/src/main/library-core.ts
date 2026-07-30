@@ -30,6 +30,18 @@ export function resolveLibraryPath(libDir: string, videoId: string, file: string
   if (!resolved.startsWith(base + path.sep)) return null;
   const videoDir = path.resolve(base, videoId);
   if (path.dirname(resolved) !== videoDir) return null;
+  // Defeat symlinks: a hostile recording folder could ship video.mp4/thumb.jpg as
+  // a symlink to an arbitrary file (e.g. ~/.ssh/id_rsa) that would then be served
+  // to the player or uploaded to the user's share host. If the file exists, its
+  // real path must still resolve inside the video dir. A not-yet-created write
+  // target is allowed - the lexical containment checks above already cover it.
+  try {
+    if (fs.existsSync(resolved) && path.dirname(fs.realpathSync(resolved)) !== fs.realpathSync(videoDir)) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
   return resolved;
 }
 
