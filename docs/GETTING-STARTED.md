@@ -14,15 +14,15 @@ Three short walkthrough videos go with this guide:
 
 ## 1. Install and verify
 
-Download `OpenLoom-0.1.2-arm64.dmg` from the
+Download the `arm64.dmg` from the
 [latest release](https://github.com/jayden9889/open-loom/releases/latest) on an
-Apple Silicon Mac. Before you open it, check it matches the published checksum -
-the build is ad-hoc signed, so the signature alone proves nothing about who made
-it:
+Apple Silicon Mac, along with `SHA256SUMS.txt`. Before you open it, check it
+matches the published checksum - the build is ad-hoc signed, so the signature
+alone proves nothing about who made it:
 
 ```bash
 shasum -a 256 -c SHA256SUMS.txt   # run in the folder with both files
-# OpenLoom-0.1.2-arm64.dmg: OK
+# OpenLoom-0.1.3-arm64.dmg: OK
 ```
 
 Drag Open Loom into Applications and open it. Because the build is not notarized,

@@ -38,18 +38,25 @@ telemetry, no vendor lock. Free to use and modify; not for sale by anyone (MIT +
   <img src="docs/media/watch-page.png" alt="Open Loom hosted watch page" width="70%">
 </p>
 
-## Watch the walkthrough
+## Watch how it works
 
-An 80-second tour of installing, recording, your library, editing, transcription and AI, and sharing.
+A 65-second tour: recording with your face in the shot, drawing while you talk, cutting the dead
+air, transcripts and AI, and the link you host yourself.
 
 <p align="center">
-  <a href="https://github.com/jayden9889/open-loom/releases/download/v0.1.0/open-loom-walkthrough.mp4">
-    <img src="docs/media/walkthrough-poster.png" alt="Watch the Open Loom walkthrough" width="70%">
+  <a href="https://github.com/jayden9889/open-loom/releases/download/v0.1.3/open-loom-how-it-works.mp4">
+    <img src="docs/media/how-it-works-poster.png" alt="Watch how Open Loom works" width="70%">
   </a>
 </p>
 <p align="center">
-  <a href="https://github.com/jayden9889/open-loom/releases/download/v0.1.0/open-loom-walkthrough.mp4"><b>Play the walkthrough</b></a>
+  <a href="https://github.com/jayden9889/open-loom/releases/download/v0.1.3/open-loom-how-it-works.mp4"><b>Play the tour</b></a>
 </p>
+
+Two shorter guides:
+[your first recording](https://github.com/jayden9889/open-loom/releases/download/v0.1.3/open-loom-record-first.mp4)
+(42s) and
+[connecting YouTube publishing](https://github.com/jayden9889/open-loom/releases/download/v0.1.3/open-loom-connect-youtube.mp4)
+(45s).
 
 ## Highlights
 
@@ -93,7 +100,7 @@ The full comparison with Loom, feature by feature, is in [FEATURES.md](FEATURES.
 
 ## Install the app
 
-The quickest way on an Apple Silicon Mac: download **`OpenLoom-0.1.2-arm64.dmg`** from the
+The quickest way on an Apple Silicon Mac: download the **`arm64.dmg`** from the
 [latest release](https://github.com/jayden9889/open-loom/releases/latest), drag Open Loom into
 Applications, then open it.
 
@@ -103,7 +110,7 @@ you open it:
 
 ```bash
 shasum -a 256 -c SHA256SUMS.txt   # run in the folder holding both files
-# OpenLoom-0.1.2-arm64.dmg: OK
+# OpenLoom-0.1.3-arm64.dmg: OK
 ```
 
 If it does not say `OK`, do not open it - you have a tampered or corrupted copy.
