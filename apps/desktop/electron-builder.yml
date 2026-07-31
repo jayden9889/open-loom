@@ -5,6 +5,11 @@ copyright: Open Loom contributors
 # version in package.json (the dep is declared as a caret range).
 electronVersion: 43.0.0
 
+# Never upload from electron-builder. The release workflow publishes, once, after
+# all three platforms have built. Without this, a GitHub git remote is enough for
+# electron-builder to auto-detect a publish target and fail on a missing GH_TOKEN.
+publish: null
+
 directories:
   output: ../../release
   buildResources: ../../assets

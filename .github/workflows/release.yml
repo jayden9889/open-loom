@@ -56,9 +56,15 @@ jobs:
       # Apple will not notarize an unsigned build, and it will not sign without
       # the certificate. Both only exist when the secrets are configured, so the
       # signed path is opt-in and the workflow still produces artifacts without.
+      # electron-builder is called directly rather than through `npm run dist`.
+      # npm swallows everything after `--` as its own flags when the script is a
+      # workspace indirection, so --mac/--publish/--config never reached the
+      # builder: each runner was silently packaging its host platform and
+      # ignoring the notarize config entirely.
       - name: Package (macOS, signed and notarized)
         if: runner.os == 'macOS' && env.HAS_APPLE_CERT == 'true'
-        run: npm run dist -- --mac --publish=never --config.mac.notarize.teamId="$APPLE_TEAM_ID"
+        working-directory: apps/desktop
+        run: npx electron-builder --config electron-builder.yml --mac --publish never --config.mac.notarize.teamId="$APPLE_TEAM_ID"
         env:
           CSC_LINK: ${{ secrets.APPLE_CERTIFICATE_P12 }}
           CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -71,17 +77,20 @@ jobs:
       # with "<repo>/apps/desktop not a file".
       - name: Package (macOS, unsigned fallback)
         if: runner.os == 'macOS' && env.HAS_APPLE_CERT != 'true'
-        run: npm run dist -- --mac --publish=never
+        working-directory: apps/desktop
+        run: npx electron-builder --config electron-builder.yml --mac --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
-        run: npm run dist -- --linux --publish=never
+        working-directory: apps/desktop
+        run: npx electron-builder --config electron-builder.yml --linux --publish never
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
-        run: npm run dist -- --win --publish=never
+        working-directory: apps/desktop
+        run: npx electron-builder --config electron-builder.yml --win --publish never
 
       - uses: actions/upload-artifact@v4
         with:
