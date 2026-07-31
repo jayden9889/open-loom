@@ -108,9 +108,11 @@ Grab your platform from the [latest release](https://github.com/jayden9889/open-
 | macOS, Apple Silicon | `OpenLoom-<version>-arm64.dmg` |
 | macOS, Intel | `OpenLoom-<version>-x64.dmg` |
 | Windows | `OpenLoom-<version>-x64.exe` |
-| Linux | `OpenLoom-<version>-x64.AppImage` (run it) or `.deb` (`sudo dpkg -i`) |
+| Linux, AppImage | `OpenLoom-<version>-x86_64.AppImage` (mark executable and run) |
+| Linux, Debian and Ubuntu | `OpenLoom-<version>-amd64.deb` (`sudo dpkg -i`) |
 
-Every artifact carries its architecture in the filename, and `arm64` builds exist for all three.
+`arm64` builds exist for every platform. Linux keeps its own architecture names,
+so x86-64 reads as `x86_64` on the AppImage and `amd64` on the deb.
 
 On macOS, drag Open Loom into Applications and open it.
 

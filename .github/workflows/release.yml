@@ -101,6 +101,7 @@ jobs:
             release/*.exe
             release/*.AppImage
             release/*.deb
+            !release/*__uninstaller*.exe
           if-no-files-found: error
 
   publish:

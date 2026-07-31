@@ -60,8 +60,8 @@ Linux AppImage and deb have no equivalent gate.
 | Platform | Artifacts |
 |---|---|
 | macOS | `.dmg` and `.zip`, arm64 and x64 |
-| Windows | NSIS `.exe`, x64 and arm64 |
-| Linux | `.AppImage` and `.deb`, x64 and arm64 |
+| Windows | NSIS `.exe`, x64 and arm64 (the `__uninstaller` files are build by-products and are not published) |
+| Linux | `.AppImage` (`x86_64`/`arm64`) and `.deb` (`amd64`/`arm64`) |
 
 ffmpeg is not bundled. The app fetches a static build on first run. macOS
 downloads are sha256-pinned in `scripts/fetch-ffmpeg.mjs`; Windows and Linux
