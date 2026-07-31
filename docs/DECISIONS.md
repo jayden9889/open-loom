@@ -3,6 +3,18 @@
 Deviations from SPEC.md and notable build-time decisions land here, newest first.
 Format: date · decision · why.
 
+- 2026-07-31 · Relicensed again, from MIT + Commons Clause to **AGPL-3.0-or-later**, taking effect
+  at v0.1.4. The 07-29 decision below optimised for "nobody may sell it" when the goal was simply to
+  publish. The goal is now a community release, and Commons Clause blocks that: GitHub reads the
+  licence as "Other", awesome-selfhosted and similar directories require an OSI-approved licence,
+  and shipping a project called Open Loom under a non-open licence reads as openwashing. AGPL keeps
+  the part that actually mattered - nobody can take this closed. Anyone running a modified Open Loom
+  as a network service must publish their changes. It does drop the literal ban on selling, which is
+  the accepted trade. Every licence claim (README badge, tagline, licence section, SPEC table,
+  CONTRIBUTING, four package.json manifests, the in-app About note, GitHub description and topics)
+  moved with it. v0.1.1 and earlier stay MIT; v0.1.2 and v0.1.3 stay MIT + Commons Clause. A licence
+  already granted on a released version cannot be withdrawn, and LICENSE states the split.
+
 - 2026-07-29 · Relicensed from plain MIT to MIT + Commons Clause, copyright Jayden Mortimer
   (supersedes the SPEC section "License: MIT"). The Commons Clause removes only the right to Sell:
   using, modifying, sharing and running Open Loom - personally or at work - stays free; selling the

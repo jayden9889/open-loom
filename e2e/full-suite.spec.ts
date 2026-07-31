@@ -124,6 +124,15 @@ async function navigate(app: ElectronApplication, view: string): Promise<void> {
   }, view);
 }
 
+// Share is not a top-level button: it sits under "More actions", and its label
+// becomes "Share settings" once the video already has a share configured. The
+// menu entries carry an explicit role="menuitem", which overrides their implicit
+// button role, so they are unreachable via getByRole('button').
+async function openShareDialog(page: Page): Promise<void> {
+  await page.getByRole('button', { name: 'More actions' }).click();
+  await page.getByRole('menuitem', { name: /^Share( settings)?$/ }).click();
+}
+
 async function setTheme(page: Page, theme: 'light' | 'dark' | 'auto'): Promise<void> {
   await page.evaluate((t) => window.openloom.setSettings({ theme: t }), theme);
   await page.waitForTimeout(220);
@@ -319,29 +328,13 @@ test('Open Loom full E2E (SPEC §7)', async () => {
           `youtube-block visible=${ytPanel}`
         );
         await shot(page, '06b-watch-publish-panel.png');
-        // The paste-back half of the guided YouTube publish, end to end:
-        // saving a messy-but-valid link must persist the canonical watch URL
-        // and auto-copy it (what actually gets sent to a prospect).
-        const recVideoId = recChecks[0]?.detail.match(/videoId=([\w-]+)/)?.[1];
-        if (recVideoId) {
-          try {
-            const res = await page.evaluate(async (vid) => {
-              const meta = await window.openloom.youtubeSaveLink(vid, 'https://youtu.be/dQw4w9WgXcQ?si=tracking&t=12');
-              const clip = await window.openloom.youtubeReadClipboardLink();
-              return { saved: meta.youtubeUrl ?? '', clip };
-            }, recVideoId);
-            const canonical = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ';
-            const ok = res.saved === canonical && res.clip === canonical;
-            record(
-              'guided YouTube publish persists + copies the canonical link',
-              ok,
-              ok ? 'pass' : 'product-bug',
-              `saved=${res.saved} clipboard=${res.clip}`
-            );
-          } catch (err) {
-            record('guided YouTube publish persists + copies the canonical link', false, 'product-bug', String(err));
-          }
-        }
+        // A "guided publish" paste-back flow (save a pasted YouTube link, keep
+        // the canonical watch URL, copy it) was tested here against
+        // `youtubeSaveLink` / `youtubeReadClipboardLink`. Neither was ever
+        // wired into the preload bridge, so the check could only ever throw.
+        // The shipped flow is OAuth publish (`youtubePublish`), covered above
+        // and by the youtube-core unit tests. Removed rather than left red; if
+        // the paste-back flow is ever built, test it here again.
       }
       // Ensure nothing is left recording before we continue.
       await page.evaluate(async () => {
@@ -436,7 +429,15 @@ test('Open Loom full E2E (SPEC §7)', async () => {
           } catch (e) {
             return { ok: false, why: 'play() rejected: ' + String(e) };
           }
-          await new Promise((r) => setTimeout(r, 900));
+          // Poll for real progress rather than sampling once after a fixed
+          // delay. First-frame decode of a just-written file can eat most of a
+          // second, which said "playback is broken" when it was only slow to
+          // start. The claim under test is that playback advances, not that it
+          // advances within an arbitrary window.
+          const deadline = Date.now() + 5000;
+          while (Date.now() < deadline && v.currentTime <= 0.15) {
+            await new Promise((r) => setTimeout(r, 100));
+          }
           return { ok: v.currentTime > 0.15, why: `currentTime=${v.currentTime.toFixed(2)} dur=${(v.duration || 0).toFixed(2)}` };
         });
         record('watch player plays the recording', played.ok, played.ok ? 'pass' : 'product-bug', played.why);
@@ -529,7 +530,7 @@ test('Open Loom full E2E (SPEC §7)', async () => {
         // Open the Share dialog and share through it.
         await openVideo(app, page, videoId);
         await page.waitForSelector('.watch', { timeout: 8000 });
-        await page.getByRole('button', { name: /^Share$/ }).click();
+        await openShareDialog(page);
         await page.waitForSelector('.shr-body', { timeout: 8000 });
         // Click "Share and copy link" if the provider is configured.
         const shareBtn = page.getByRole('button', { name: /Share and copy link/i });
@@ -559,7 +560,7 @@ test('Open Loom full E2E (SPEC §7)', async () => {
       try {
         await openVideo(app, page, videoId);
         await page.waitForSelector('.watch', { timeout: 8000 });
-        await page.getByRole('button', { name: /^Share$/ }).click();
+        await openShareDialog(page);
         await page.waitForSelector('.shr-body', { timeout: 8000 });
         await shot(page, '11-share-dialog-light.png');
         await page.locator('.modal-close, [aria-label="Close"]').first().click().catch(() => undefined);
@@ -709,6 +710,19 @@ test('Open Loom full E2E (SPEC §7)', async () => {
     console.log('\n===== E2E REPORT =====');
     for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'} [${c.classification}] ${c.name}${c.detail ? ' :: ' + c.detail : ''}`);
     console.log(`screenshots: ${shots.length} in ${SCREENS}`);
+  }
+
+  // Recording a check is not the same as asserting it. Until this existed the
+  // suite printed "FAIL (product-bug)" lines and still exited 0, so a green
+  // tick meant nothing. `environment` and `test-bug` stay non-fatal on purpose:
+  // a missing screen-recording permission is not the product's fault. A
+  // `product-bug` is, and it fails the run.
+  const productBugs = checks.filter((c) => !c.ok && c.classification === 'product-bug');
+  if (productBugs.length) {
+    throw new Error(
+      `${productBugs.length} product-bug check(s) failed:\n` +
+        productBugs.map((c) => `  - ${c.name}${c.detail ? ' :: ' + c.detail : ''}`).join('\n')
+    );
   }
 });
 

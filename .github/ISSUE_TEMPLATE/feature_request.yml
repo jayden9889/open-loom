@@ -1,0 +1,43 @@
+name: Feature request
+description: Suggest something Open Loom should do
+labels: ['enhancement']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Open Loom deliberately does a narrow thing well. Requests that keep it
+        local-first and account-free have the best odds.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Describe the situation you are stuck in, not the feature you have in mind. It often has a simpler answer than the one you would ask for.
+      placeholder: I record short walkthroughs for clients and I need to...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like Open Loom to do?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: How do you handle it today?
+      description: The workaround you currently use, and why it is not good enough.
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Windows
+        - Linux
+    validations:
+      required: true

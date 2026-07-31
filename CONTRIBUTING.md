@@ -1,8 +1,7 @@
 # Contributing to Open Loom
 
-Thanks for helping build Open Loom. It is source-available under MIT with the Commons Clause (free
-to use and modify, not for sale) and community-driven. This guide covers the setup, the layout, and
-the bar a change needs to clear before it merges.
+Thanks for helping build Open Loom. It is free software under the AGPL-3.0 and community-driven.
+This guide covers the setup, the layout, and the bar a change needs to clear before it merges.
 
 ## Getting set up
 
@@ -69,5 +68,5 @@ pipeline, the library, and the share providers. See [docs/TESTING.md](docs/TESTI
   example R14, S3, G6).
 - If you deviate from SPEC.md, add a dated entry to `docs/DECISIONS.md` and reference it.
 
-By contributing you agree that your contribution is licensed under the repository licence (MIT with
-the Commons Clause condition, see LICENSE) and that Jayden Mortimer remains the Licensor named in it.
+By contributing you agree that your contribution is licensed under the repository licence, the GNU
+Affero General Public License v3.0 or later (see LICENSE). You keep the copyright on what you write.

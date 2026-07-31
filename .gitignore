@@ -18,3 +18,7 @@ data/
 test-assets/
 .tmp/
 
+
+# Local render sources for the release videos (published as release assets)
+docs/media/new-videos/
+docs/media/open-loom-facefirst.mp4

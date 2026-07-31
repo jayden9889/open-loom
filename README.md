@@ -5,7 +5,7 @@
 <h1 align="center">Open Loom</h1>
 
 <p align="center">
-  A local-first, source-available screen recorder with Loom-style sharing that runs on storage you own.
+  A local-first, open-source screen recorder with Loom-style sharing that runs on storage you own.
 </p>
 
 <p align="center">
@@ -19,8 +19,8 @@
 
 <p align="center">
   <a href="https://github.com/jayden9889/open-loom/actions/workflows/ci.yml"><img src="https://github.com/jayden9889/open-loom/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <img src="https://img.shields.io/badge/license-MIT%20%2B%20Commons%20Clause-635BFF" alt="MIT + Commons Clause licence">
-  <img src="https://img.shields.io/badge/platform-macOS%2013%2B-635BFF" alt="Platform">
+  <img src="https://img.shields.io/badge/license-AGPL--3.0-635BFF" alt="AGPL-3.0 licence">
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-635BFF" alt="Platform">
 </p>
 
 ---
@@ -28,7 +28,7 @@
 Record your screen with your camera, or just your camera. Everything lands as a plain, seekable MP4
 in a library on your own disk. When you want to send a link, share through a share server you run yourself (hosted watch
 page with comments, reactions and viewer analytics) or any S3-compatible bucket. No accounts, no
-telemetry, no vendor lock. Free to use and modify; not for sale by anyone (MIT + Commons Clause).
+telemetry, no vendor lock. Free and open source under the AGPL-3.0.
 
 <p align="center">
   <img src="docs/media/watch.png" alt="Open Loom watch view" width="49%">
@@ -96,13 +96,23 @@ The full comparison with Loom, feature by feature, is in [FEATURES.md](FEATURES.
   succeeds, and the app runs with those two effects doing nothing - the reason only appears in the
   log. Everything else works.
 - macOS 14.2 or newer for system-audio capture. The rest of the app works on macOS 13 and later.
-  Windows and Linux code paths are kept portable but v1 is only tested on macOS.
+- Windows and Linux builds ship from the same source and CI, but the maintainer develops on macOS,
+  so those two get far less real-world mileage. Bug reports from them are especially welcome.
 
 ## Install the app
 
-The quickest way on an Apple Silicon Mac: download the **`arm64.dmg`** from the
-[latest release](https://github.com/jayden9889/open-loom/releases/latest), drag Open Loom into
-Applications, then open it.
+Grab your platform from the [latest release](https://github.com/jayden9889/open-loom/releases/latest):
+
+| Platform | File |
+|---|---|
+| macOS, Apple Silicon | `OpenLoom-<version>-arm64.dmg` |
+| macOS, Intel | `OpenLoom-<version>-x64.dmg` |
+| Windows | `OpenLoom-<version>-x64.exe` |
+| Linux | `OpenLoom-<version>-x64.AppImage` (run it) or `.deb` (`sudo dpkg -i`) |
+
+Every artifact carries its architecture in the filename, and `arm64` builds exist for all three.
+
+On macOS, drag Open Loom into Applications and open it.
 
 **Verify the download first.** The build is ad-hoc signed, so the signature proves nothing about
 who made it. Every release ships a `SHA256SUMS.txt`; check the file you downloaded matches before
@@ -110,7 +120,7 @@ you open it:
 
 ```bash
 shasum -a 256 -c SHA256SUMS.txt   # run in the folder holding both files
-# OpenLoom-0.1.3-arm64.dmg: OK
+# OpenLoom-0.1.4-arm64.dmg: OK
 ```
 
 If it does not say `OK`, do not open it - you have a tampered or corrupted copy.
@@ -121,7 +131,10 @@ Privacy & Security**, scroll to the Security section, and click **Open Anyway** 
 Loom message, then confirm. macOS remembers the choice. (The older right-click > Open trick was
 removed in macOS 15 Sequoia; on macOS 14 and earlier it still works.)
 
-It then lives in your menu bar and Dock. Intel Macs, Windows and Linux: build from source below.
+It then lives in your menu bar and Dock.
+
+On Windows, SmartScreen will warn about an unrecognised publisher for the same reason: the
+installer is unsigned. Choose **More info** then **Run anyway**. Linux builds have no such gate.
 
 New here? The [Getting started guide](docs/GETTING-STARTED.md) walks through your first recording,
 connecting YouTube, editing, and sharing.
@@ -304,7 +317,10 @@ OpenScreen (MIT, archived). Open Loom is original code.
 
 ## Licence
 
-MIT with the Commons Clause condition, copyright Jayden Mortimer. In plain words: use it, modify
-it, share it, run it at work - all free. What nobody may do is sell Open Loom itself or charge for
-a product or service whose value is substantially Open Loom. Versions v0.1.1 and earlier were
-published under plain MIT and remain so. See [LICENSE](LICENSE).
+GNU Affero General Public License v3.0 or later, copyright Jayden Mortimer. In plain words: use it,
+modify it, share it, run it at work, sell it if you like - all free. The one obligation is
+reciprocity. If you distribute a modified version, or run one as a service other people use over a
+network, you have to publish your changes under the same licence.
+
+Licence history: v0.1.1 and earlier shipped under plain MIT, v0.1.2 and v0.1.3 under MIT with the
+Commons Clause. Those releases stay under the licence they shipped with. See [LICENSE](LICENSE).

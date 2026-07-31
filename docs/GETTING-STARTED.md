@@ -1,8 +1,11 @@
 # Getting started with Open Loom
 
 Open Loom records your screen with your face on camera, keeps everything on your
-Mac, and turns any recording into a link you can send. This is the five minute
-tour: install it, record, and share.
+own machine, and turns any recording into a link you can send. This is the five
+minute tour: install it, record, and share.
+
+The steps below show macOS, where the app gets the most testing. Windows and
+Linux builds are on the same release page and work the same way once installed.
 
 Three short walkthrough videos go with this guide:
 
@@ -14,15 +17,16 @@ Three short walkthrough videos go with this guide:
 
 ## 1. Install and verify
 
-Download the `arm64.dmg` from the
-[latest release](https://github.com/jayden9889/open-loom/releases/latest) on an
-Apple Silicon Mac, along with `SHA256SUMS.txt`. Before you open it, check it
-matches the published checksum - the build is ad-hoc signed, so the signature
-alone proves nothing about who made it:
+Download the build for your machine from the
+[latest release](https://github.com/jayden9889/open-loom/releases/latest), along
+with `SHA256SUMS.txt`. On a Mac that is `arm64.dmg` for Apple Silicon or
+`x64.dmg` for Intel. Before you open it, check it matches the published checksum
+- the build is ad-hoc signed, so the signature alone proves nothing about who
+made it:
 
 ```bash
 shasum -a 256 -c SHA256SUMS.txt   # run in the folder with both files
-# OpenLoom-0.1.3-arm64.dmg: OK
+# OpenLoom-0.1.4-arm64.dmg: OK
 ```
 
 Drag Open Loom into Applications and open it. Because the build is not notarized,

@@ -54,6 +54,13 @@ async function windowByUrl(app: ElectronApplication, fragment: string, timeoutMs
 test('camera-mode recording lands with audio and video in sync', async () => {
   test.skip(!fs.existsSync(MAIN_ENTRY), 'Build the app first: npm run build');
 
+  // This spec runs last, straight after the camera-heavy stress spec. Playwright
+  // resolves app.close() before macOS has released the capture device, so the
+  // recording here could start, find no device, and tear itself down before the
+  // stop call - surfacing as "Nothing is recording". Run alone it passes every
+  // time; the settle is about device release, not about the product being slow.
+  await new Promise((r) => setTimeout(r, 2000));
+
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'openloom-sync-'));
   const libraryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'openloom-sync-lib-'));
   fs.writeFileSync(

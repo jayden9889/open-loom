@@ -1,0 +1,105 @@
+name: Release
+
+# Pushing a v* tag builds every platform and publishes one release with a
+# single SHA256SUMS.txt covering all of it. Nothing is hand-built on a laptop.
+on:
+  push:
+    tags:
+      - 'v*'
+  # Lets you rehearse the whole matrix on a branch without publishing anything.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing should not bin the artifacts that did build.
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build renderer and main
+        run: npm run build
+
+      # Apple will not notarize an unsigned build, and it will not sign without
+      # the certificate. Both only exist when the secrets are configured, so the
+      # signed path is opt-in and the workflow still produces artifacts without.
+      - name: Package (macOS, signed and notarized)
+        if: runner.os == 'macOS' && env.CSC_LINK != ''
+        run: npm run dist -- --mac --config.mac.notarize.teamId="$APPLE_TEAM_ID"
+        env:
+          CSC_LINK: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Package (macOS, unsigned fallback)
+        if: runner.os == 'macOS' && env.CSC_LINK == ''
+        run: npm run dist -- --mac
+        env:
+          CSC_LINK: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: npm run dist -- --linux
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: npm run dist -- --win
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.os }}
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.exe
+            release/*.AppImage
+            release/*.deb
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      # One checksum file for every artifact, so `shasum -a 256 -c` verifies the
+      # whole release in one command regardless of which platform you grabbed.
+      - name: Generate SHA256SUMS
+        working-directory: artifacts
+        run: |
+          shasum -a 256 * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          draft: true
+          generate_release_notes: true

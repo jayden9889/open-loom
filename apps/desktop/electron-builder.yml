@@ -9,6 +9,11 @@ directories:
   output: ../../release
   buildResources: ../../assets
 
+# Every artifact carries its architecture. electron-builder's default drops the
+# suffix on x64, which leaves an Intel DMG and a Windows installer with names
+# that say nothing about what they run on.
+artifactName: ${productName}-${version}-${arch}.${ext}
+
 # electron-vite emits main, preload and renderer into out/.
 files:
   - out/**
@@ -45,17 +50,29 @@ mac:
   category: public.app-category.productivity
   icon: ../../assets/icon.png
   target:
-    - dmg
-    - zip
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
   # Screen recording, camera and microphone need usage strings on macOS.
   extendInfo:
     NSCameraUsageDescription: Open Loom records your camera when you choose a camera or screen-plus-camera recording.
     NSMicrophoneUsageDescription: Open Loom records your microphone when the mic is enabled for a recording.
+  # Notarization is only accepted on a hardened-runtime build, and the hardened
+  # runtime kills Electron's JIT and the camera/mic devices unless the
+  # entitlements below hand them back. Harmless on an unsigned local build.
+  hardenedRuntime: true
+  entitlements: ../../build/entitlements.mac.plist
+  entitlementsInherit: ../../build/entitlements.mac.plist
+  # The release workflow adds `mac.notarize.teamId` when the Apple secrets are
+  # present. Left out here so `npm run dist` still works with no credentials.
+  gatekeeperAssess: false
 
 win:
   icon: ../../assets/icon.png
   target:
-    - nsis
+    - target: nsis
+      arch: [x64, arm64]
 
 nsis:
   oneClick: false
@@ -65,6 +82,9 @@ nsis:
 linux:
   icon: ../../assets/icon.png
   category: AudioVideo
+  synopsis: Local-first screen recorder with Loom-style sharing
   target:
-    - AppImage
-    - deb
+    - target: AppImage
+      arch: [x64, arm64]
+    - target: deb
+      arch: [x64, arm64]

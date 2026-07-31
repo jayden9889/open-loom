@@ -1,9 +1,9 @@
 {
   "name": "openloom-desktop",
   "productName": "OpenLoom",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "AGPL-3.0-or-later",
   "description": "Open Loom desktop app: local-first screen recorder with Loom-parity UX.",
   "type": "module",
   "main": "out/main/index.js",
