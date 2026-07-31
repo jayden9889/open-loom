@@ -26,5 +26,15 @@
   "optionalDependencies": {
     "uiohook-napi": "^1.5.5",
     "openloom-camera-effects": "file:./native/camera-effects"
-  }
+  },
+  "author": {
+    "name": "Jayden Mortimer",
+    "email": "jayden@mortaihq.com"
+  },
+  "homepage": "https://github.com/jayden9889/open-loom",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jayden9889/open-loom.git"
+  },
+  "desktopName": "open-loom.desktop"
 }

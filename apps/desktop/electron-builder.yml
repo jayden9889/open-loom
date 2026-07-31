@@ -83,6 +83,9 @@ linux:
   icon: ../../assets/icon.png
   category: AudioVideo
   synopsis: Local-first screen recorder with Loom-style sharing
+  # Pairs with `desktopName` in package.json to tie a running window to the
+  # .desktop entry, so the launcher shows the app icon not a placeholder.
+  syncDesktopName: true
   target:
     - target: AppImage
       arch: [x64, arm64]
