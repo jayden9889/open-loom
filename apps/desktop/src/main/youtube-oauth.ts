@@ -13,7 +13,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { shell } from 'electron';
 import type { Settings } from '@shared/types';
-import { getSettings, getSecret, setSettings } from './settings';
+import { getSettings, getSecret, hasSecret, setSettings } from './settings';
 import {
   buildAuthUrl,
   parseLoopbackCallback,
@@ -37,7 +37,11 @@ interface TokenResponse {
 
 /** True once a refresh token is stored (i.e. the user has connected an account). */
 export function isConnected(): boolean {
-  return getSecret('youtube.refreshToken').trim().length > 0;
+  // Presence, not decryptability. Asking getSecret here meant a keychain that
+  // refused this build (which is what an update looks like to macOS) reported
+  // the account as never connected, and the user was quietly signed out of a
+  // YouTube account whose refresh token was sitting safely on disk.
+  return hasSecret('youtube.refreshToken');
 }
 
 /** Title of the connected account's channel, resolved at connect time ('' = unknown). */

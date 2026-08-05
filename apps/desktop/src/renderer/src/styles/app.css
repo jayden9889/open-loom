@@ -1030,6 +1030,36 @@ textarea {
   text-align: center;
 }
 
+/* Shown in place of the source grid when macOS has not granted Screen
+   Recording. It replaces what used to be a repeating error toast, so it has to
+   carry the fix itself, not just report the fault. */
+.source-blocked {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 14px;
+  text-align: center;
+  color: var(--ol-text-secondary);
+}
+
+.source-blocked-title {
+  margin: 0;
+  font-weight: 600;
+  color: var(--ol-text);
+}
+
+.source-blocked p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.source-blocked-note {
+  color: var(--ol-text-dim);
+}
+
 .source-card {
   display: flex;
   flex-direction: column;
@@ -1095,9 +1125,14 @@ textarea {
 
 .mic-meter-fill {
   height: 100%;
+  width: 100%;
   background: var(--ol-accent);
   border-radius: var(--ol-radius-pill);
-  transition: width 90ms linear;
+  /* Scaled via transform from a rAF loop - no transition, it would restart
+     every frame and permanently lag the live level. */
+  transform: scaleX(0);
+  transform-origin: left;
+  will-change: transform;
 }
 
 /* Simple by default: just the Camera/Microphone toggles. */
@@ -1409,26 +1444,36 @@ textarea {
 }
 
 /* Shimmer skeleton while the video surface is not yet decodable - the raw
-   element paints green garbage if shown before loadeddata. */
+   element paints green garbage if shown before loadeddata. The sweep animates
+   transform (compositor-only); background-position repainted the whole player
+   every frame right when the renderer is busiest decoding. */
 .player-skeleton {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.player-skeleton::after {
+  content: '';
   position: absolute;
   inset: 0;
   background: linear-gradient(
     100deg,
-    rgba(255, 255, 255, 0.03) 38%,
-    rgba(255, 255, 255, 0.1) 50%,
-    rgba(255, 255, 255, 0.03) 62%
+    transparent 38%,
+    rgba(255, 255, 255, 0.07) 50%,
+    transparent 62%
   );
-  background-size: 220% 100%;
   animation: skeleton-sweep 1.4s var(--ol-ease) infinite;
+  will-change: transform;
 }
 
 @keyframes skeleton-sweep {
   from {
-    background-position: 120% 0;
+    transform: translateX(100%);
   }
   to {
-    background-position: -120% 0;
+    transform: translateX(-100%);
   }
 }
 
@@ -1533,6 +1578,24 @@ textarea {
   height: 4px;
   border-radius: 2px;
   background: var(--ol-accent);
+}
+
+/* Grab knob at the playhead - scales in on hover so the bar reads as draggable. */
+.scrubber-played::after {
+  content: '';
+  position: absolute;
+  right: -6px;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--ol-accent);
+  transform: translateY(-50%) scale(0);
+  transition: transform var(--ol-dur-fast) var(--ol-ease);
+}
+
+.scrubber:hover .scrubber-played::after {
+  transform: translateY(-50%) scale(1);
 }
 
 .scrubber-tip {
@@ -2230,21 +2293,33 @@ textarea {
   outline-offset: 1px;
 }
 
+/* Full-width layer moved with translateX(%) so the per-frame playhead update
+   is compositor-only; the visible line and cap live on the pseudo-elements. */
 .tl-playhead {
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 2px;
-  margin-left: -1px;
-  background: var(--ol-record);
+  left: 0;
+  width: 100%;
   pointer-events: none;
+  will-change: transform;
 }
 
 .tl-playhead::before {
   content: '';
   position: absolute;
   top: 0;
-  left: 50%;
+  bottom: 0;
+  left: -1px;
+  width: 2px;
+  background: var(--ol-record);
+}
+
+.tl-playhead::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
   transform: translateX(-50%);
   border-left: 5px solid transparent;
   border-right: 5px solid transparent;
@@ -2552,4 +2627,19 @@ textarea {
   margin: 0;
   font-size: var(--ol-text-sm);
   color: var(--ol-danger);
+}
+
+/* ---------------------------------------------------------------- reduced motion */
+
+/* Decorative motion only - spinners keep turning because they communicate
+   "still working", which reduced-motion users still need. */
+@media (prefers-reduced-motion: reduce) {
+  .watch,
+  .editor,
+  .settings,
+  .toast,
+  .player-skeleton::after,
+  .rec-strip-dot {
+    animation: none;
+  }
 }

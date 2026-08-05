@@ -7,6 +7,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ReactNode,
@@ -103,7 +104,9 @@ export function ContextMenu({
   const [openSub, setOpenSub] = useState<number | null>(null);
   const [pos, setPos] = useState({ x, y });
 
-  useEffect(() => {
+  // Clamp to the viewport before first paint - with useEffect the menu showed
+  // clipped at the raw x,y for one frame, then snapped into place.
+  useLayoutEffect(() => {
     const el = ref.current;
     if (el) {
       const rect = el.getBoundingClientRect();
@@ -112,6 +115,9 @@ export function ContextMenu({
         y: Math.min(y, window.innerHeight - rect.height - 8),
       });
     }
+  }, [x, y]);
+
+  useEffect(() => {
     const close = () => onClose();
     const key = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -124,7 +130,7 @@ export function ContextMenu({
       window.removeEventListener('blur', close);
       window.removeEventListener('keydown', key);
     };
-  }, [x, y, onClose]);
+  }, [onClose]);
 
   return (
     <div

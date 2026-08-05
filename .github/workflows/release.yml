@@ -92,6 +92,11 @@ jobs:
         working-directory: apps/desktop
         run: npx electron-builder --config electron-builder.yml --win --publish never
 
+      # latest*.yml is the update feed: electron-updater reads it off the
+      # release to learn what the newest version is, and an installed app has
+      # no other way to find out. The .blockmap files next to it are what let a
+      # client download only the changed chunks instead of the whole installer.
+      # Ship the artifacts without these and auto-update silently never fires.
       - uses: actions/upload-artifact@v4
         with:
           name: dist-${{ matrix.os }}
@@ -101,6 +106,8 @@ jobs:
             release/*.exe
             release/*.AppImage
             release/*.deb
+            release/latest*.yml
+            release/*.blockmap
             !release/*__uninstaller*.exe
           if-no-files-found: error
 

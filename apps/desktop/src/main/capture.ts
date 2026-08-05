@@ -25,6 +25,25 @@ export function clearPendingCapture(): void {
   pending = null;
 }
 
+/**
+ * Electron grants most permission requests by default. A screen recorder only
+ * ever needs the capture devices, so everything else (geolocation, clipboard
+ * read, notifications, MIDI, USB...) is denied outright rather than left to a
+ * default that widens as Chromium adds APIs.
+ */
+const ALLOWED_PERMISSIONS = new Set(['media', 'display-capture', 'fullscreen']);
+
+export function installPermissionHandlers(): void {
+  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
+    const allowed = ALLOWED_PERMISSIONS.has(permission);
+    if (!allowed) log.warn(`denied permission request: ${permission}`);
+    callback(allowed);
+  });
+  session.defaultSession.setPermissionCheckHandler((_wc, permission) =>
+    ALLOWED_PERMISSIONS.has(permission)
+  );
+}
+
 export function installDisplayMediaHandler(): void {
   session.defaultSession.setDisplayMediaRequestHandler(
     (_request, callback) => {

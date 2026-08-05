@@ -18,6 +18,17 @@ export interface PlayerPageOptions {
   cta?: { label: string; url: string } | null;
 }
 
+/**
+ * The CTA is the one stored value that lands in an href. updateShareSettings
+ * rejects non-http(s) on the way in, but the page is also rebuilt from stored
+ * meta on a later toggle, and other writers (ol:updateVideo) reach that meta
+ * without passing through it - so the scheme is checked again here, at the
+ * point where it would actually become a link.
+ */
+function isHttpUrl(url: string): boolean {
+  return /^https?:\/\//i.test(url);
+}
+
 function escapeHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;')
@@ -258,7 +269,7 @@ export function buildPlayerPage(opts: PlayerPageOptions): string {
     <div class="byline">${opts.creator ? `${escapeHtml(opts.creator)} · ` : ''}${escapeHtml(dateLabel)}</div>
     <div class="actions">
       ${opts.allowDownload ? `<a class="btn" href="video.mp4" download>${DOWNLOAD}<span>Download</span></a>` : ''}
-      ${opts.cta ? `<a class="btn btn-accent" href="${escapeHtml(opts.cta.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(opts.cta.label)}</a>` : ''}
+      ${opts.cta && isHttpUrl(opts.cta.url) ? `<a class="btn btn-accent" href="${escapeHtml(opts.cta.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(opts.cta.label)}</a>` : ''}
     </div>
   </main>
   ${chaptersHtml}

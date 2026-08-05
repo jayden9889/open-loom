@@ -13,6 +13,7 @@ import {
   encryptSecretsInPatch,
   maskSecrets,
   decryptSecret,
+  hasStoredSecret,
   type SecretCodec,
 } from './settings-core';
 import { log } from './logger';
@@ -36,8 +37,14 @@ const codec: SecretCodec = {
     try {
       return safeStorage.decryptString(Buffer.from(stored, 'base64'));
     } catch (err) {
-      log.warn(`failed to decrypt stored secret: ${String(err)}`);
-      return '';
+      // The secret IS there, the OS just would not hand back the key - almost
+      // always because macOS re-scoped the keychain after the app was updated
+      // and re-signed. Never let that read as "the user has not set this up":
+      // callers surface this text, and disconnecting is the user's decision.
+      log.error(`could not unlock a stored secret (keychain refused this build): ${String(err)}`);
+      throw new Error(
+        'Your saved sign-in could not be unlocked on this machine. macOS locks saved credentials when the app is updated. Reconnect the account in Settings to store it again.'
+      );
     }
   },
 };
@@ -111,6 +118,14 @@ export function setSettings(patch: Partial<Settings>): Settings {
 /** Decrypted secret for main-process consumers (transcription, AI, sharing). */
 export function getSecret(dottedPath: string): string {
   return decryptSecret(getSettings(), dottedPath, codec);
+}
+
+/**
+ * Whether a secret is on disk, regardless of whether this build can decrypt it.
+ * Use for "is this account connected?"; getSecret is for actually using it.
+ */
+export function hasSecret(dottedPath: string): boolean {
+  return hasStoredSecret(getSettings(), dottedPath);
 }
 
 export function onSettingsChanged(cb: (s: Settings) => void): () => void {

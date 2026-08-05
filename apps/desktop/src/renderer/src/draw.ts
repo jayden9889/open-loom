@@ -60,6 +60,35 @@ let rafPending = false;
 /** Set when the ink is fading out; all strokes share one alpha ramp. */
 let inkFadeStart: number | null = null;
 
+// Finished strokes are baked onto an offscreen canvas so the per-frame cost
+// while a stroke or ripple is live is one drawImage, not re-walking every
+// point of every stroke laid down this session - long annotation runs made
+// the pen visibly trail the cursor mid-recording.
+const baked = document.createElement('canvas');
+const bakedCtx = baked.getContext('2d')!;
+
+function strokePath(target: CanvasRenderingContext2D, stroke: Stroke): void {
+  const pts = stroke.points;
+  if (pts.length < 2) return;
+  target.strokeStyle = stroke.color;
+  target.lineWidth = 4;
+  target.lineCap = 'round';
+  target.lineJoin = 'round';
+  target.beginPath();
+  target.moveTo(pts[0]!.x, pts[0]!.y);
+  for (let i = 1; i < pts.length; i++) target.lineTo(pts[i]!.x, pts[i]!.y);
+  target.stroke();
+}
+
+/** Redraw every finished stroke onto the offscreen canvas (resize, clear, fade-end). */
+function rebake(): void {
+  const dpr = window.devicePixelRatio || 1;
+  bakedCtx.setTransform(1, 0, 0, 1, 0, 0);
+  bakedCtx.clearRect(0, 0, baked.width, baked.height);
+  bakedCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  for (const s of strokes) if (s !== current) strokePath(bakedCtx, s);
+}
+
 function resize(): void {
   const dpr = window.devicePixelRatio || 1;
   canvas.width = Math.round(window.innerWidth * dpr);
@@ -67,6 +96,9 @@ function resize(): void {
   canvas.style.width = `${window.innerWidth}px`;
   canvas.style.height = `${window.innerHeight}px`;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  baked.width = canvas.width;
+  baked.height = canvas.height;
+  rebake();
 }
 window.addEventListener('resize', resize);
 resize();
@@ -86,20 +118,12 @@ function render(): void {
     strokes = [];
     current = null;
     inkFadeStart = null;
+    rebake();
   }
-  for (const stroke of strokes) {
-    const pts = stroke.points;
-    if (pts.length < 2) continue;
-    ctx.globalAlpha = alpha;
-    ctx.strokeStyle = stroke.color;
-    ctx.lineWidth = 4;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.beginPath();
-    ctx.moveTo(pts[0]!.x, pts[0]!.y);
-    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i]!.x, pts[i]!.y);
-    ctx.stroke();
-  }
+  ctx.globalAlpha = alpha;
+  // baked holds device pixels; the dpr transform on ctx maps it back to CSS size.
+  ctx.drawImage(baked, 0, 0, window.innerWidth, window.innerHeight);
+  if (current) strokePath(ctx, current);
   ctx.globalAlpha = 1;
 
   ripples = ripples.filter((r) => now - r.startedAt < RIPPLE_MS);
@@ -138,12 +162,20 @@ canvas.addEventListener('pointerdown', (e) => {
 window.addEventListener('pointermove', (e) => {
   if (drawEnabled) placeDot(e.clientX, e.clientY);
   if (!current) return;
+  // Skip sub-2px movement: it is pointer noise that fattens the point list
+  // without changing the drawn line.
+  const last = current.points[current.points.length - 1]!;
+  const dx = e.clientX - last.x;
+  const dy = e.clientY - last.y;
+  if (dx * dx + dy * dy < 4) return;
   current.points.push({ x: e.clientX, y: e.clientY });
   schedule();
 });
 
 function endStroke(): void {
   if (current) {
+    // Bake the finished stroke so render() never has to walk its points again.
+    strokePath(bakedCtx, current);
     current = null;
     schedule();
   }
@@ -156,6 +188,7 @@ function clearAll(): void {
   ripples = [];
   current = null;
   inkFadeStart = null;
+  rebake();
   schedule();
 }
 

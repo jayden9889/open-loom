@@ -59,7 +59,13 @@ export class LibraryStore {
     fs.mkdirSync(this.dir, { recursive: true });
   }
 
+  /**
+   * Every filesystem path in the store is derived from this method, so the id
+   * is validated here rather than at each call site - get/delete/duplicate all
+   * took the id straight from IPC and only resolveLibraryPath checked it.
+   */
   videoDir(id: string): string {
+    if (!ID_RE.test(id)) throw new Error('Unknown recording.');
     return path.join(this.dir, id);
   }
 

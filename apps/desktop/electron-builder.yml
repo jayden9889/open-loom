@@ -3,12 +3,23 @@ productName: OpenLoom
 copyright: Open Loom contributors
 # Pinned so electron-builder can resolve the platform binaries without a fixed
 # version in package.json (the dep is declared as a caret range).
-electronVersion: 43.0.0
+# BUMP THIS EVERY RELEASE: it is what decides which Chromium the shipped app
+# runs, so a stale pin ships known-fixed browser CVEs no matter what the
+# lockfile resolved to.
+electronVersion: 43.2.0
 
-# Never upload from electron-builder. The release workflow publishes, once, after
-# all three platforms have built. Without this, a GitHub git remote is enough for
-# electron-builder to auto-detect a publish target and fail on a missing GH_TOKEN.
-publish: null
+# This block is what generates app-update.yml inside the bundle, which is the
+# only way electron-updater knows where to look for a new version. It does NOT
+# make electron-builder upload anything: every packaging step in the release
+# workflow passes `--publish never`, and the release itself is published once,
+# after all three platforms have built, by the workflow's own publish job.
+# (It used to be `publish: null` purely to stop a bare GitHub remote being
+# auto-detected into a push that failed on a missing GH_TOKEN. `--publish never`
+# already covers that, and null left the app with no update feed at all.)
+publish:
+  provider: github
+  owner: jayden9889
+  repo: open-loom
 
 directories:
   output: ../../release

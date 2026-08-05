@@ -29,6 +29,7 @@ export function defaultSettings(saveDir: string): Settings {
     launchAtLogin: false,
     namePattern: 'Recording - {date}, {time}',
     ffmpegPath: '',
+    autoUpdate: true,
     recording: {
       quality: '1080p',
       fps: 30,
@@ -174,6 +175,20 @@ export function maskSecrets(settings: Settings): Settings {
     }
   }
   return out;
+}
+
+/**
+ * True when a secret is stored, WITHOUT attempting to decrypt it.
+ *
+ * Decryption can fail for reasons that have nothing to do with whether the
+ * user signed in - most often the OS refusing the keychain after the app was
+ * re-signed by an update. Anything answering "is this account connected?" has
+ * to ask this, not decryptSecret: treating a locked secret as an absent one
+ * signs the user out of an account they never disconnected.
+ */
+export function hasStoredSecret(settings: Settings, path: string): boolean {
+  const value = getPath(settings, path);
+  return typeof value === 'string' && value.trim().length > 0;
 }
 
 /** Decrypt a stored secret value ('' when unset). */

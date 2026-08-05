@@ -8,6 +8,7 @@ import {
   ENC_PREFIX,
   SECRET_MASK,
   decryptSecret,
+  hasStoredSecret,
   defaultSettings,
   encryptSecretsInPatch,
   maskSecrets,
@@ -94,5 +95,39 @@ describe('secrets', () => {
   it('round-trips decryption', () => {
     expect(decryptSecret(withStoredKey(), 'ai.apiKey', codec)).toBe('real-key');
     expect(decryptSecret(defaultSettings('/x'), 'ai.apiKey', codec)).toBe('');
+  });
+});
+
+describe('a locked keychain must not read as a signed-out account', () => {
+  /** What macOS does to a re-signed build: the blob is there, the key is refused. */
+  const refusingCodec: SecretCodec = {
+    encrypt: (p) => Buffer.from(p, 'utf8').toString('base64'),
+    decrypt: () => {
+      throw new Error('keychain refused this build');
+    },
+  };
+
+  function withStoredToken(): Settings {
+    const s = defaultSettings('/x');
+    s.youtube.refreshToken = ENC_PREFIX + 'whatever-was-stored';
+    return s;
+  }
+
+  it('reports a stored secret as present even when it cannot be decrypted', () => {
+    expect(hasStoredSecret(withStoredToken(), 'youtube.refreshToken')).toBe(true);
+  });
+
+  it('reports an unset secret as absent', () => {
+    expect(hasStoredSecret(defaultSettings('/x'), 'youtube.refreshToken')).toBe(false);
+  });
+
+  it('does not quietly turn an undecryptable secret into an empty string', () => {
+    // The old behaviour returned '' here, which every caller read as "never
+    // connected" - that is the silent logout this guards against.
+    expect(() => decryptSecret(withStoredToken(), 'youtube.refreshToken', refusingCodec)).toThrow();
+  });
+
+  it('still treats a genuinely empty secret as empty rather than throwing', () => {
+    expect(decryptSecret(defaultSettings('/x'), 'youtube.refreshToken', refusingCodec)).toBe('');
   });
 });

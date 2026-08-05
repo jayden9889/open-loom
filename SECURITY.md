@@ -29,6 +29,12 @@ Things that are already known and deliberate, so not vulnerabilities:
 
 - **Releases are ad-hoc signed, not notarized.** macOS blocks the first launch and you clear it in
   System Settings. This is a distribution gap, not a code flaw.
+- **What the auto-updater trusts.** When `autoUpdate` is on, the app checks the GitHub releases feed
+  for `jayden9889/open-loom` over HTTPS, verifies the download against the SHA-512 in that feed, and
+  installs it on quit. Because the builds are not yet signed with a developer certificate, that chain
+  proves the file matches the release feed - it does not independently prove the feed is authentic,
+  so it rests on HTTPS and on GitHub holding the release. If that trust boundary is not one you want,
+  turn `autoUpdate` off in Settings and update by hand; the app then makes no outbound call on its own.
 - **A share link is a capability.** Anyone holding the URL can watch, unless you set a password on
   the video. That is how link sharing works.
 - **Your API keys live on your machine.** Transcription and AI keys are stored encrypted at rest via

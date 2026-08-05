@@ -168,3 +168,25 @@ describe('search', () => {
     expect(store.search('   ')).toEqual([]);
   });
 });
+
+describe('video id validation at the store boundary', () => {
+  // resolveLibraryPath always checked the id, but get/delete/duplicate took it
+  // straight off IPC. videoDir is the one place every store path is built.
+  const TRAVERSALS = ['../escape', 'a/../../etc', 'a/b', '..', 'has space', 'sym%2Flink'];
+
+  it('refuses to build a path for a traversing id', () => {
+    for (const bad of TRAVERSALS) {
+      expect(() => store.videoDir(bad)).toThrow();
+    }
+  });
+
+  it('still accepts a normal id', () => {
+    expect(store.videoDir('abc123_-')).toBe(path.join(dir, 'abc123_-'));
+  });
+
+  it('reports a traversing id as missing rather than reading outside the library', () => {
+    for (const bad of TRAVERSALS) {
+      expect(() => store.get(bad)).toThrow();
+    }
+  });
+});

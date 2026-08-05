@@ -123,6 +123,7 @@ export function WatchView({
   const [captionsOn, setCaptionsOn] = useState(false);
   const [cues, setCues] = useState<VttCue[] | null>(null);
   const [hoverT, setHoverT] = useState<{ x: number; t: number } | null>(null);
+  const [scrubbing, setScrubbing] = useState(false);
   const [videoError, setVideoError] = useState<string | null>(null);
   const [videoReady, setVideoReady] = useState(false);
   const [titleDraft, setTitleDraft] = useState<string | null>(null);
@@ -307,6 +308,20 @@ export function WatchView({
     v.currentTime = Math.max(0, Math.min(t, v.duration || t));
   }, []);
 
+  // Smooth playhead while playing (same pattern as the Editor): timeupdate
+  // only fires ~4x/s, which made the played bar jump in quarter-second steps.
+  useEffect(() => {
+    if (!playing) return;
+    let raf = 0;
+    const tick = () => {
+      const v = videoRef.current;
+      if (v) setCurrent(v.currentTime);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [playing]);
+
   const togglePlay = useCallback(() => {
     const v = videoRef.current;
     if (!v) return;
@@ -373,10 +388,42 @@ export function WatchView({
     else await el.requestFullscreen();
   };
 
-  const activeCue = useMemo(() => {
-    if (!captionsOn || !cues) return null;
+  // The rAF playhead changes `current` every frame, so everything derived from
+  // it has to be either cheap (these scans) or referentially stable so memoised
+  // children skip re-rendering. `find` returns the SAME cue object for the
+  // whole time the playhead is inside it, which is what keeps cueListEl below
+  // from rebuilding hundreds of transcript rows 60x a second.
+  const currentCue = useMemo(() => {
+    if (!cues) return null;
     return cues.find((c) => current >= c.start && current <= c.end) ?? null;
-  }, [captionsOn, cues, current]);
+  }, [cues, current]);
+
+  const activeCue = captionsOn ? currentCue : null;
+
+  const filteredCues = useMemo(
+    () =>
+      cues?.filter((c) => !transcriptQuery.trim() || c.text.toLowerCase().includes(transcriptQuery.toLowerCase())) ??
+      [],
+    [cues, transcriptQuery]
+  );
+
+  const cueListEl = useMemo(
+    () =>
+      filteredCues.map((c, i) => (
+        <button
+          key={i}
+          type="button"
+          className={`cue${c === currentCue ? ' current' : ''}`}
+          onClick={() => seek(c.start)}
+        >
+          <span className="cue-time">{formatDuration(c.start)}</span>
+          <span className="cue-text">
+            <HighlightedText text={c.text} query={transcriptQuery} />
+          </span>
+        </button>
+      )),
+    [filteredCues, currentCue, transcriptQuery, seek]
+  );
 
   const saveTitle = async () => {
     if (titleDraft === null || !meta) return;
@@ -405,8 +452,6 @@ export function WatchView({
 
   if (!meta) return <div className="boot" />;
 
-  const filteredCues =
-    cues?.filter((c) => !transcriptQuery.trim() || c.text.toLowerCase().includes(transcriptQuery.toLowerCase())) ?? [];
   const chapters = meta.ai?.chapters ?? [];
 
   return (
@@ -560,17 +605,28 @@ export function WatchView({
                   aria-valuemax={duration}
                   aria-valuenow={current}
                   tabIndex={0}
-                  onMouseMove={(e) => {
+                  onPointerMove={(e) => {
                     const rect = e.currentTarget.getBoundingClientRect();
                     const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-                    setHoverT({ x: e.clientX - rect.left, t: frac * duration });
+                    setHoverT({ x: frac * rect.width, t: frac * duration });
+                    if (scrubbing) {
+                      // Track the pointer optimistically so the bar never lags
+                      // behind the drag while the video finishes seeking.
+                      setCurrent(frac * duration);
+                      seek(frac * duration);
+                    }
                   }}
-                  onMouseLeave={() => setHoverT(null)}
-                  onClick={(e) => {
+                  onPointerLeave={() => setHoverT(null)}
+                  onPointerDown={(e) => {
+                    e.currentTarget.setPointerCapture(e.pointerId);
+                    setScrubbing(true);
                     const rect = e.currentTarget.getBoundingClientRect();
                     const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+                    setCurrent(frac * duration);
                     seek(frac * duration);
                   }}
+                  onPointerUp={() => setScrubbing(false)}
+                  onPointerCancel={() => setScrubbing(false)}
                   onKeyDown={(e) => {
                     if (e.key === 'ArrowLeft') seek(current - 5);
                     if (e.key === 'ArrowRight') seek(current + 5);
@@ -1028,19 +1084,7 @@ export function WatchView({
                     />
                   </div>
                   <div className="cue-list">
-                    {filteredCues.map((c, i) => (
-                      <button
-                        key={i}
-                        type="button"
-                        className={`cue${current >= c.start && current <= c.end ? ' current' : ''}`}
-                        onClick={() => seek(c.start)}
-                      >
-                        <span className="cue-time">{formatDuration(c.start)}</span>
-                        <span className="cue-text">
-                          <HighlightedText text={c.text} query={transcriptQuery} />
-                        </span>
-                      </button>
-                    ))}
+                    {cueListEl}
                     {filteredCues.length === 0 && <p className="side-note">No transcript lines match.</p>}
                   </div>
                   {transcriptionConfigured && (

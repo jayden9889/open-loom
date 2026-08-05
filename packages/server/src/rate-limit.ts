@@ -75,6 +75,13 @@ export interface Limiters {
   viewMint: RateLimiter;
   /** Unlock attempts per IP+video, with the window doubling as a lockout. */
   unlock: RateLimiter;
+  /**
+   * Failed creator-API auth per IP. Only failures count, so a busy desktop
+   * client uploading chunks is never throttled, while a bearer-token guessing
+   * loop is. Generous because a wrong key is usually one misconfigured client
+   * retrying, not an attack.
+   */
+  creatorAuth: RateLimiter;
 }
 
 export function createLimiters(): Limiters {
@@ -84,5 +91,6 @@ export function createLimiters(): Limiters {
     beacon: new RateLimiter(120, 60_000),
     viewMint: new RateLimiter(40, 600_000),
     unlock: new RateLimiter(8, 900_000),
+    creatorAuth: new RateLimiter(20, 300_000),
   };
 }

@@ -68,10 +68,13 @@ function AppInner() {
         applyTheme(s.theme);
         setPermissions(p);
         setRecoverables(rec);
-        const platform = (await window.openloom.appInfo()).platform;
-        const needsSetup =
-          !s.setupComplete || !p.ffmpeg || (platform === 'darwin' && p.screen !== 'granted');
-        if (needsSetup) setView({ name: 'setup' });
+        // Onboarding is for people who have never finished it. A returning user
+        // who loses Screen Recording (macOS revokes it whenever the app is
+        // re-signed, which every update does) used to land back on "before your
+        // first recording" with their library hidden behind it - it reads as
+        // being logged out of your own app. They stay in the Library now and get
+        // a banner that fixes the one thing that is actually missing.
+        if (!s.setupComplete) setView({ name: 'setup' });
         await reloadLibrary();
       } catch (err) {
         push('error', cleanIpcError(err));
@@ -80,6 +83,15 @@ function AppInner() {
       }
     })();
   }, [reloadLibrary, push]);
+
+  // Re-read permissions when the window comes back to the front: the user has
+  // usually just been in System Settings granting the thing the banner asked
+  // for, and it should clear itself rather than needing a restart.
+  useEffect(() => {
+    const refresh = () => void window.openloom.getPermissions().then(setPermissions, () => undefined);
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
+  }, []);
 
   useEffect(() => {
     const offState = window.openloom.onRecordingState((s) => {
@@ -250,6 +262,43 @@ function AppInner() {
                 Processing recording{recState.processingNote ? ` · ${recState.processingNote}` : ''}
               </>
             )}
+          </div>
+        )}
+
+        {settings.setupComplete && (permissions.screen !== 'granted' || !permissions.ffmpeg) && (
+          <div className="recover-banner">
+            <Icon.Warning width={16} height={16} />
+            <div className="recover-text">
+              <strong>
+                {permissions.screen !== 'granted'
+                  ? 'Screen Recording permission is switched off.'
+                  : 'ffmpeg is missing.'}
+              </strong>
+              <span>
+                {permissions.screen !== 'granted'
+                  ? 'Your recordings are all still here. macOS drops this permission whenever the app is updated - turn it back on to record again.'
+                  : 'Open Loom needs ffmpeg to turn captures into playable MP4s.'}
+              </span>
+            </div>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => {
+                if (permissions.screen !== 'granted') window.openloom.openSystemSettings('screen');
+                else setView({ name: 'setup' });
+              }}
+            >
+              {permissions.screen !== 'granted' ? 'Open System Settings' : 'Fix it'}
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() =>
+                void window.openloom.getPermissions().then(setPermissions)
+              }
+            >
+              Re-check
+            </button>
           </div>
         )}
 

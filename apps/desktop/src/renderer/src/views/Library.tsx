@@ -3,7 +3,7 @@
  * duration badge, search across titles + transcripts, folder filtering,
  * card context menu, designed empty states.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import type { Folder, VideoMeta } from '@shared/types';
 import { Icon } from '../components/icons';
 import {
@@ -23,7 +23,9 @@ interface CardUpload {
   failed: boolean;
 }
 
-function VideoCard({
+/** memo + id-based callbacks: the grid re-renders on every search keystroke,
+ * and without this every card reconciled each time. */
+const VideoCard = memo(function VideoCard({
   video,
   upload,
   onOpen,
@@ -32,16 +34,20 @@ function VideoCard({
 }: {
   video: VideoMeta;
   upload?: CardUpload;
-  onOpen: () => void;
-  onMenu: (x: number, y: number) => void;
-  onRetryUpload: () => void;
+  onOpen: (video: VideoMeta) => void;
+  onMenu: (x: number, y: number, video: VideoMeta) => void;
+  onRetryUpload: (video: VideoMeta) => void;
 }) {
   const [hover, setHover] = useState(false);
   /** Tracked per image: a missing preview.gif must not blank the still as well. */
   const [thumbFailed, setThumbFailed] = useState(false);
   const [gifFailed, setGifFailed] = useState(false);
+  /** The GIF only replaces the still once it has actually loaded - swapping the
+   * src to an unfetched file showed a dead beat on first hover. */
+  const [gifReady, setGifReady] = useState(false);
   const thumb = window.openloom.fileUrl(video.id, 'thumb.jpg');
   const gif = window.openloom.fileUrl(video.id, 'preview.gif');
+  const showGif = hover && gifReady && !gifFailed;
   const uploading = upload !== undefined && !upload.failed;
   // A share block with no uploadedAt is a link that was minted (and possibly
   // copied) but whose upload never landed: it is a dead 404 until retried. This
@@ -52,24 +58,32 @@ function VideoCard({
   return (
     <div
       className="video-card"
-      onMouseEnter={() => setHover(true)}
+      onMouseEnter={() => {
+        setHover(true);
+        if (!gifReady && !gifFailed) {
+          const img = new Image();
+          img.onload = () => setGifReady(true);
+          img.onerror = () => setGifFailed(true);
+          img.src = gif;
+        }
+      }}
       onMouseLeave={() => setHover(false)}
       onContextMenu={(e) => {
         e.preventDefault();
-        onMenu(e.clientX, e.clientY);
+        onMenu(e.clientX, e.clientY, video);
       }}
     >
-      <button type="button" className="video-thumb" onClick={onOpen} aria-label={`Watch ${video.title}`}>
+      <button type="button" className="video-thumb" onClick={() => onOpen(video)} aria-label={`Watch ${video.title}`}>
         {/* Hiding via an inline style React does not own left the tile blank for
             the rest of the session: on mouse-leave React swaps the src back but
             never clears the style it never set. Track it as state instead, keyed
             on which image actually failed. */}
         <img
-          src={hover ? gif : thumb}
+          src={showGif ? gif : thumb}
           alt=""
           loading="lazy"
-          style={{ visibility: (hover ? gifFailed : thumbFailed) ? 'hidden' : undefined }}
-          onError={() => (hover ? setGifFailed(true) : setThumbFailed(true))}
+          style={{ visibility: !showGif && thumbFailed ? 'hidden' : undefined }}
+          onError={() => (showGif ? setGifFailed(true) : setThumbFailed(true))}
         />
         <span className="video-duration">{formatDuration(video.durationSec)}</span>
         {uploading && (
@@ -85,7 +99,7 @@ function VideoCard({
         )}
       </button>
       <div className="video-card-meta">
-        <button type="button" className="video-title" onClick={onOpen} title={video.title}>
+        <button type="button" className="video-title" onClick={() => onOpen(video)} title={video.title}>
           {video.title}
         </button>
         <div className="video-sub">
@@ -95,7 +109,7 @@ function VideoCard({
               type="button"
               className="badge badge-failed"
               title="This share link is not live yet - the upload did not finish. Click to retry."
-              onClick={onRetryUpload}
+              onClick={() => onRetryUpload(video)}
             >
               <Icon.Refresh width={12} height={12} />
               Retry upload
@@ -111,7 +125,7 @@ function VideoCard({
             aria-label="More actions"
             onClick={(e) => {
               const rect = (e.target as HTMLElement).getBoundingClientRect();
-              onMenu(rect.left, rect.bottom + 4);
+              onMenu(rect.left, rect.bottom + 4, video);
             }}
           >
             <Icon.More width={15} height={15} />
@@ -120,7 +134,7 @@ function VideoCard({
       </div>
     </div>
   );
-}
+});
 
 export function LibraryView({
   videos,
@@ -170,13 +184,20 @@ export function LibraryView({
     });
   }, [onChanged]);
 
-  const retryUpload = (video: VideoMeta) => {
-    setUploads((u) => ({ ...u, [video.id]: { pct: 0, failed: false } }));
-    void window.openloom.shareVideo(video.id).catch((err) => {
-      push('error', cleanIpcError(err));
-      setUploads((u) => ({ ...u, [video.id]: { pct: 100, failed: true } }));
-    });
-  };
+  // Stable references so memo(VideoCard) actually skips re-renders.
+  const retryUpload = useCallback(
+    (video: VideoMeta) => {
+      setUploads((u) => ({ ...u, [video.id]: { pct: 0, failed: false } }));
+      void window.openloom.shareVideo(video.id).catch((err) => {
+        push('error', cleanIpcError(err));
+        setUploads((u) => ({ ...u, [video.id]: { pct: 100, failed: true } }));
+      });
+    },
+    [push]
+  );
+
+  const openCard = useCallback((video: VideoMeta) => onOpen(video.id), [onOpen]);
+  const menuCard = useCallback((x: number, y: number, video: VideoMeta) => setMenu({ x, y, video }), []);
 
   // Search titles locally for instant feedback + transcripts via main.
   useEffect(() => {
@@ -368,9 +389,9 @@ export function LibraryView({
               key={v.id}
               video={v}
               upload={uploads[v.id]}
-              onOpen={() => onOpen(v.id)}
-              onMenu={(x, y) => setMenu({ x, y, video: v })}
-              onRetryUpload={() => retryUpload(v)}
+              onOpen={openCard}
+              onMenu={menuCard}
+              onRetryUpload={retryUpload}
             />
           ))}
         </div>

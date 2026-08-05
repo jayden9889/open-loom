@@ -12,12 +12,18 @@ import { nanoid } from 'nanoid';
 import type { AppCtx } from '../context.js';
 import { getVideo, type VideoRow } from '../db.js';
 import { ID_RE, nowIso, timingSafeEqualStr } from '../util.js';
+import { clientIp, type RateLimiter } from '../rate-limit.js';
 
-export function creatorAuth(ctx: AppCtx) {
+export function creatorAuth(ctx: AppCtx, limiter?: RateLimiter) {
   return async (c: Context, next: Next): Promise<Response | void> => {
     const header = c.req.header('authorization') ?? '';
     const token = header.replace(/^Bearer\s+/i, '').trim();
     if (!token || !timingSafeEqualStr(token, ctx.cfg.apiKey)) {
+      // Only wrong keys are counted, so a legitimate client streaming upload
+      // chunks never trips this; a guessing loop does.
+      if (limiter && !limiter.allow(clientIp(c, ctx.cfg.trustProxy))) {
+        return c.json({ error: 'Too many failed attempts. Wait a few minutes and try again.' }, 429);
+      }
       return c.json({ error: 'Unauthorized. Send the server API key as a Bearer token.' }, 401);
     }
     await next();

@@ -2,6 +2,7 @@
  * Registers every `ol:*` invoke handler behind the preload bridge
  * (SPEC section 5).
  */
+import path from 'node:path';
 import { app, clipboard, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import type { RecordingOptions, Settings, VideoMeta } from '@shared/types';
 import { listCaptureSources } from './capture';
@@ -32,6 +33,38 @@ import {
   youtubeOpenStudioEdit,
 } from './youtube';
 import { log } from './logger';
+
+/**
+ * Filesystem paths the user picked in a native dialog this session.
+ *
+ * Settings that name an executable (ffmpeg, whisper) are spawned by the main
+ * process, so accepting one straight off the settings patch would turn any
+ * renderer-side script execution into arbitrary code execution. The renderer
+ * cannot fabricate an entry here: only the OS file picker adds to it.
+ */
+const dialogPicked = new Set<string>();
+
+/** Settings fields whose value is later handed to child_process. */
+const EXECUTABLE_SETTINGS: { get(s: Settings): string; label: string }[] = [
+  { get: (s) => s.ffmpegPath, label: 'ffmpeg' },
+  { get: (s) => s.transcription.whisperPath, label: 'whisper' },
+];
+
+/**
+ * A patch may point an executable setting at a new path only if that path came
+ * from the file picker. Clearing it (empty = resolve from PATH + app bin dir)
+ * is always allowed.
+ */
+function assertExecutablePathsPicked(patch: Partial<Settings>, current: Settings): void {
+  const merged = { ...current, ...patch, transcription: { ...current.transcription, ...patch.transcription } };
+  for (const field of EXECUTABLE_SETTINGS) {
+    const next = field.get(merged);
+    if (!next || next === field.get(current)) continue;
+    if (!dialogPicked.has(path.resolve(next))) {
+      throw new Error(`Choose the ${field.label} binary with the Browse button so it can be verified.`);
+    }
+  }
+}
 
 function handle(channel: string, fn: (event: IpcMainInvokeEvent, ...args: any[]) => unknown): void {
   ipcMain.handle(channel, async (event, ...args) => {
@@ -135,11 +168,13 @@ export function registerIpc(): void {
   // -- settings & system -------------------------------------------------------
   handle('ol:getSettings', () => getSettingsMasked());
   handle('ol:setSettings', (_e, patch: Partial<Settings>) => {
+    const current = getSettings();
     if (patch.shortcuts) {
-      const merged = { ...getSettings().shortcuts, ...patch.shortcuts };
+      const merged = { ...current.shortcuts, ...patch.shortcuts };
       const problem = validateShortcuts(merged);
       if (problem) throw new Error(problem);
     }
+    assertExecutablePathsPicked(patch, current);
     setSettings(patch);
     const masked = getSettingsMasked();
     broadcast('ol:settings-changed', masked);
@@ -163,7 +198,12 @@ export function registerIpc(): void {
     const result = win
       ? await dialog.showOpenDialog(win, { properties: ['openFile'], filters })
       : await dialog.showOpenDialog({ properties: ['openFile'], filters });
-    return result.canceled ? null : (result.filePaths[0] ?? null);
+    if (result.canceled) return null;
+    const picked = result.filePaths[0] ?? null;
+    // Records the user's consent to this exact path; assertExecutablePathsPicked
+    // and setCustomThumbnail both read it.
+    if (picked) dialogPicked.add(path.resolve(picked));
+    return picked;
   });
   handle('ol:getPermissions', () => getPermissions());
   handle('ol:requestPermission', (_e, kind: string) => requestPermission(kind));

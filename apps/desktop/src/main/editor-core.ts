@@ -271,6 +271,13 @@ async function trimByReencode(
 
 async function concatDemux(bins: FfmpegBinaries, parts: string[], output: string): Promise<void> {
   const listFile = path.join(path.dirname(parts[0]!), 'concat.txt');
+  // The concat demuxer is line-based, so a newline in a path (legal on macOS,
+  // and saveDir is user-chosen) would inject a second directive.
+  for (const p of parts) {
+    if (p.includes('\n') || p.includes('\r')) {
+      throw new Error('That folder name contains a line break, which ffmpeg cannot process. Rename it and try again.');
+    }
+  }
   const escape = (p: string) => p.replace(/'/g, "'\\''");
   fs.writeFileSync(listFile, parts.map((p) => `file '${escape(p)}'`).join('\n'));
   await runFfmpeg(bins.ffmpeg, [

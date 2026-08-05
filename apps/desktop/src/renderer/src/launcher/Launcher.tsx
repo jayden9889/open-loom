@@ -123,12 +123,15 @@ function CameraPreview({ deviceId, mirror }: { deviceId: string; mirror: boolean
 }
 
 function MicMeter({ deviceId, enabled }: { deviceId: string; enabled: boolean }) {
-  const [level, setLevel] = useState(0);
+  // The level is written straight to the fill element every frame; routing it
+  // through React state at 60fps re-rendered the launcher and fought the CSS
+  // width transition, which made the meter lag the voice.
+  const fillRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!enabled) {
-      setLevel(0);
+      if (fillRef.current) fillRef.current.style.transform = 'scaleX(0)';
       return;
     }
     let ctx: AudioContext | null = null;
@@ -158,7 +161,8 @@ function MicMeter({ deviceId, enabled }: { deviceId: string; enabled: boolean })
             const c = (v - 128) / 128;
             sum += c * c;
           }
-          setLevel(Math.min(1, Math.sqrt(sum / data.length) * 3));
+          const level = Math.min(1, Math.sqrt(sum / data.length) * 3);
+          if (fillRef.current) fillRef.current.style.transform = `scaleX(${level})`;
           raf = requestAnimationFrame(tick);
         };
         tick();
@@ -178,7 +182,7 @@ function MicMeter({ deviceId, enabled }: { deviceId: string; enabled: boolean })
   if (error) return <span className="mic-meter-error">{error}</span>;
   return (
     <div className="mic-meter" aria-label="Microphone level">
-      <div className="mic-meter-fill" style={{ width: `${Math.round(level * 100)}%` }} />
+      <div ref={fillRef} className="mic-meter-fill" style={{ transform: 'scaleX(0)' }} />
     </div>
   );
 }
@@ -197,8 +201,28 @@ export function Launcher() {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [starting, setStarting] = useState(false);
   const [loadingSources, setLoadingSources] = useState(true);
+  const [screenBlocked, setScreenBlocked] = useState(false);
+  const lastSourceError = useRef<string | null>(null);
 
   const refreshSources = useCallback(async () => {
+    // macOS keys Screen Recording to the app's code signature and path, so a
+    // fresh install always starts denied - and every enumeration throws while
+    // it is. This runs on a timer, so without the gate below a denied install
+    // raises an error toast every three seconds, which teaches the user to
+    // ignore toasts and buries the one message that would actually fix it.
+    try {
+      const perms = await window.openloom.getPermissions();
+      if (perms.screen !== 'granted') {
+        setScreenBlocked(true);
+        setSources([]);
+        setLoadingSources(false);
+        return;
+      }
+      setScreenBlocked(false);
+    } catch {
+      // A failing probe is not itself grounds to hide the picker; fall through
+      // and let the enumeration report the real fault.
+    }
     try {
       const list = await window.openloom.listCaptureSources();
       setSources(list);
@@ -206,8 +230,15 @@ export function Launcher() {
         if (cur && list.some((s) => s.id === cur)) return cur;
         return list.find((s) => s.display)?.id ?? list[0]?.id ?? '';
       });
+      lastSourceError.current = null;
     } catch (err) {
-      push('error', cleanIpcError(err));
+      // Same reasoning as above: on a polled call an unchanged fault must
+      // surface once, not once per tick.
+      const message = cleanIpcError(err);
+      if (lastSourceError.current !== message) {
+        lastSourceError.current = message;
+        push('error', message);
+      }
     } finally {
       setLoadingSources(false);
     }
@@ -215,7 +246,19 @@ export function Launcher() {
 
   useEffect(() => {
     void refreshSources();
-    const timer = setInterval(() => void refreshSources(), 3000);
+    // This used to re-enumerate on a 3s timer, which meant capturing and
+    // encoding a thumbnail of every open window twenty times a minute for as
+    // long as the panel sat open - a constant battery cost for a list that only
+    // changes while you are off doing something else. Refresh when the panel is
+    // actually being looked at instead. The launcher window is reused rather
+    // than destroyed, so 'focus' covers re-showing it and visibilitychange
+    // covers the inactive show; the header's refresh button covers the rest.
+    const onFocus = () => void refreshSources();
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') void refreshSources();
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
     void window.openloom.appInfo().then(setInfo);
     void (async () => {
       const s = await window.openloom.getSettings();
@@ -246,7 +289,8 @@ export function Launcher() {
       applyTheme(s.theme);
     });
     return () => {
-      clearInterval(timer);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
       offSettings();
     };
   }, [refreshSources, push]);
@@ -366,7 +410,25 @@ export function Launcher() {
           {/* Everything below the heading shares ONE scroll region, so the
               source list can never bleed under the footer. */}
           <div className="launcher-sources-scroll">
-            {loadingSources && sources.length === 0 && <div className="source-loading">Finding screens and windows</div>}
+            {screenBlocked && (
+              <div className="source-blocked">
+                <p className="source-blocked-title">Screen Recording is off</p>
+                <p>macOS has to allow Open Loom to see your screen before it can list anything to record.</p>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={() => window.openloom.openSystemSettings('screen')}
+                >
+                  Open System Settings
+                </button>
+                {/* macOS only hands the capture stream to a process that was
+                    already trusted when it started, so a fresh grant does not
+                    apply to the running app. */}
+                <p className="source-blocked-note">Tick Open Loom in the list, then quit and reopen the app.</p>
+              </div>
+            )}
+
+            {!screenBlocked && loadingSources && sources.length === 0 && <div className="source-loading">Finding screens and windows</div>}
 
             {/* Full screen first: records the whole display, so you can switch
                 tabs and apps freely while filming - the standard walkthrough mode. */}

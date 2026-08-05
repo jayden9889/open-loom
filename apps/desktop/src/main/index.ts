@@ -6,7 +6,7 @@
  */
 import { app, BrowserWindow } from 'electron';
 import { registerScheme, installProtocolHandler } from './protocol';
-import { installDisplayMediaHandler } from './capture';
+import { installDisplayMediaHandler, installPermissionHandlers } from './capture';
 import { registerIpc } from './ipc';
 import { registerEngineIpc, isRecordingActive } from './recorder-ipc';
 import { createMainWindow, showLauncher } from './windows';
@@ -15,6 +15,7 @@ import { ensureFfmpeg } from './ffmpeg';
 import { installShortcuts, unregisterAllShortcuts } from './shortcuts';
 import { installTray } from './tray';
 import { installClickHighlights, shutdownClickHighlights } from './clicks';
+import { installUpdater } from './updater';
 import { log } from './logger';
 import { runTestHooks } from './test-hooks';
 
@@ -36,6 +37,7 @@ if (!gotLock) {
 
   app.whenReady().then(() => {
     installProtocolHandler();
+    installPermissionHandlers();
     installDisplayMediaHandler();
     registerIpc();
     registerEngineIpc();
@@ -49,6 +51,7 @@ if (!gotLock) {
     // Silent onboarding: fetch ffmpeg in the background when it is missing so
     // the first recording never hits an install wall.
     void ensureFfmpeg('launch').catch((err) => log.warn(`ffmpeg prefetch failed: ${String(err)}`));
+    installUpdater();
     log.info(`Open Loom ready (v${app.getVersion()}, ${process.platform} ${process.getSystemVersion?.() ?? ''})`);
     void runTestHooks();
   });

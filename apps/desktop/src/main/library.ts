@@ -47,6 +47,21 @@ export function fileUrl(id: string, file: string): string {
 }
 
 /** Set a custom thumbnail from an image file or a frame of the video (SPEC L7). */
+/** True when the file starts with the JPEG SOI + marker bytes (FF D8 FF). */
+function isJpeg(file: string): boolean {
+  let fd: number | null = null;
+  try {
+    fd = fs.openSync(file, 'r');
+    const head = Buffer.alloc(3);
+    const read = fs.readSync(fd, head, 0, 3, 0);
+    return read === 3 && head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff;
+  } catch {
+    return false;
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
+  }
+}
+
 export async function setCustomThumbnail(
   id: string,
   source: { path?: string; atSec?: number }
@@ -57,7 +72,11 @@ export async function setCustomThumbnail(
   if (source.path) {
     if (!fs.existsSync(source.path)) throw new Error('That image file could not be read.');
     const ext = path.extname(source.path).toLowerCase();
-    if (ext === '.jpg' || ext === '.jpeg') {
+    // The extension is renderer-supplied and thumb.jpg is part of the share
+    // upload, so a mislabelled file would be published verbatim by a later
+    // share. Only copy when the bytes really are a JPEG; anything else goes
+    // through ffmpeg, which re-encodes and cannot pass arbitrary content on.
+    if ((ext === '.jpg' || ext === '.jpeg') && isJpeg(source.path)) {
       fs.copyFileSync(source.path, thumbPath);
     } else {
       // Convert any other image format to JPEG via ffmpeg.

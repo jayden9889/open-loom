@@ -38,8 +38,19 @@ export function createServerApp(cfg: ServerConfig): ServerApp {
   const ctx: AppCtx = { db, cfg };
   const app = new Hono();
 
+  // Baseline headers on every response: stop MIME sniffing turning an
+  // attacker-supplied upload into script, and keep share URLs (which are the
+  // whole access control for an unlisted video) out of third-party referer logs.
+  app.use('*', async (c, next) => {
+    await next();
+    c.header('X-Content-Type-Options', 'nosniff');
+    c.header('Referrer-Policy', 'no-referrer');
+  });
+
   app.get('/healthz', (c) => c.json({ ok: true, name: 'openloom-server' }));
   app.get('/', (c) => c.redirect('/healthz'));
+
+  const limiters = createLimiters();
 
   const api = new Hono();
   // Reject an oversized creator body with 413 before any handler buffers it.
@@ -50,14 +61,13 @@ export function createServerApp(cfg: ServerConfig): ServerApp {
       onError: (c) => c.json({ error: 'That request body is too large.' }, 413),
     })
   );
-  api.use('*', creatorAuth(ctx));
+  api.use('*', creatorAuth(ctx, limiters.creatorAuth));
   api.route('/', videosRoutes(ctx));
   api.route('/', uploadRoutes(ctx));
   api.route('/', activityRoutes(ctx));
   app.route('/api', api);
 
   const isUnlocked = makeIsUnlocked();
-  const limiters = createLimiters();
   const viewer = new Hono();
   // Reject oversized viewer bodies with 413 BEFORE any handler parses them.
   viewer.use(

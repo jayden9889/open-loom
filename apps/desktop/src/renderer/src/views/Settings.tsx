@@ -461,6 +461,12 @@ export function SettingsView({
               <Row label="Launch at login">
                 <Toggle checked={s.launchAtLogin} onChange={(v) => save({ launchAtLogin: v })} label="Launch at login" />
               </Row>
+              <Row
+                label="Automatic updates"
+                note="Check GitHub for a new release once per launch and install it when you quit. This is the only request Open Loom makes on its own."
+              >
+                <Toggle checked={s.autoUpdate} onChange={(v) => save({ autoUpdate: v })} label="Automatic updates" />
+              </Row>
               <Row label="Default recording name" note="Tokens: {date} {time} {mode}">
                 <SavedInput
                   value={s.namePattern}
@@ -650,11 +656,14 @@ export function SettingsView({
                     }
                   >
                     <div className="btn-row">
-                      <SavedInput
+                      {/* Read-only on purpose: main spawns this binary, so it only
+                          accepts a path the user chose in the file dialog. */}
+                      <input
+                        type="text"
+                        readOnly
                         value={s.transcription.whisperPath}
-                        placeholder="/path/to/whisper-cli"
-                        onSave={(v) => save({ transcription: { ...s.transcription, whisperPath: v } })}
-                        ariaLabel="whisper-cli path"
+                        placeholder="Not set - install below or browse for a binary"
+                        aria-label="whisper-cli path"
                       />
                       <button
                         type="button"

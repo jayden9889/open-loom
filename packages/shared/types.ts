@@ -224,6 +224,11 @@ export interface Settings {
   namePattern: string;
   /** Optional explicit path to an ffmpeg binary; empty = resolve from PATH + app bin dir. */
   ffmpegPath: string;
+  /**
+   * Update checks contact GitHub, which is the only outbound call the app makes
+   * on its own. A local-first tool has to let you switch that off.
+   */
+  autoUpdate: boolean;
   recording: {
     quality: QualityPreset;
     fps: 30 | 60;

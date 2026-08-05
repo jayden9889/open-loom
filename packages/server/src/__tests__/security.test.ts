@@ -245,4 +245,38 @@ describe('creator API hardening', () => {
     ).toThrow(/too short/i);
     fs.rmSync(dataDir, { recursive: true, force: true });
   });
+
+  it('throttles bearer-token guessing after repeated failures', async () => {
+    const srv = makeApp();
+    const guess = (n: number) =>
+      srv.app.request('/api/videos', {
+        method: 'POST',
+        headers: { authorization: `Bearer wrong-key-guess-${n}`, 'content-type': 'application/json' },
+        body: '{}',
+      });
+    const codes: number[] = [];
+    for (let i = 0; i < 25; i++) codes.push((await guess(i)).status);
+    expect(codes[0]).toBe(401);
+    expect(codes[codes.length - 1]).toBe(429);
+  });
+
+  it('never throttles a client sending the correct key', async () => {
+    const srv = makeApp();
+    for (let i = 0; i < 30; i++) {
+      const res = await srv.app.request('/api/videos', {
+        method: 'POST',
+        headers: authJson,
+        body: JSON.stringify({ title: `Recording ${i}` }),
+      });
+      expect(res.status).not.toBe(429);
+      expect(res.ok).toBe(true);
+    }
+  });
+
+  it('sends nosniff and no-referrer on every response', async () => {
+    const srv = makeApp();
+    const res = await srv.app.request('/healthz');
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(res.headers.get('referrer-policy')).toBe('no-referrer');
+  });
 });

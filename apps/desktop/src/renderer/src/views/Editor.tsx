@@ -346,33 +346,38 @@ export function EditorView({
     }
   }, [keptRanges]);
 
+  // The handler closes over fresh state each render; the ref indirection keeps
+  // the window listener registered once instead of being torn down and re-added
+  // on every frame while the rAF playhead is running.
+  const onKeyRef = useRef<(e: KeyboardEvent) => void>(() => undefined);
+  onKeyRef.current = (e: KeyboardEvent) => {
+    const target = e.target as HTMLElement;
+    if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return;
+    if ((e.metaKey || e.ctrlKey) && (e.key === 'z' || e.key === 'Z')) {
+      e.preventDefault();
+      undo();
+      return;
+    }
+    if (e.key === ' ') {
+      e.preventDefault();
+      togglePlay();
+    }
+    if (e.key === 's' || e.key === 'S') splitAtPlayhead();
+    if ((e.key === 'Backspace' || e.key === 'Delete') && selected !== null) {
+      if (segs[selected]?.kept) removeSegment(selected);
+      else restoreSegment(selected);
+    }
+    // Nudge the playhead for precise cuts; trim handles keep their own arrows.
+    if (!target.closest?.('.tl-handle')) {
+      if (e.key === 'ArrowLeft') seek(current - (e.shiftKey ? 1 : 0.1));
+      if (e.key === 'ArrowRight') seek(current + (e.shiftKey ? 1 : 0.1));
+    }
+  };
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement;
-      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return;
-      if ((e.metaKey || e.ctrlKey) && (e.key === 'z' || e.key === 'Z')) {
-        e.preventDefault();
-        undo();
-        return;
-      }
-      if (e.key === ' ') {
-        e.preventDefault();
-        togglePlay();
-      }
-      if (e.key === 's' || e.key === 'S') splitAtPlayhead();
-      if ((e.key === 'Backspace' || e.key === 'Delete') && selected !== null) {
-        if (segs[selected]?.kept) removeSegment(selected);
-        else restoreSegment(selected);
-      }
-      // Nudge the playhead for precise cuts; trim handles keep their own arrows.
-      if (!target.closest?.('.tl-handle')) {
-        if (e.key === 'ArrowLeft') seek(current - (e.shiftKey ? 1 : 0.1));
-        if (e.key === 'ArrowRight') seek(current + (e.shiftKey ? 1 : 0.1));
-      }
-    };
+    const onKey = (e: KeyboardEvent) => onKeyRef.current(e);
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  });
+  }, []);
 
   // --- segment operations ---------------------------------------------------
 
@@ -498,12 +503,24 @@ export function EditorView({
     downEvent.stopPropagation();
     // One undo step per drag, not per pointer move.
     setHistory((h) => [...h.slice(-49), segs]);
+    // A trackpad emits 120+ moves/sec and every currentTime write starts a
+    // decoder seek, so applying per-move made the drag stutter. Batch to one
+    // apply per animation frame with the latest pointer position.
+    let pendingX: number | null = null;
+    let raf = 0;
     const move = (e: PointerEvent) => {
-      const t = timeAtClientX(e.clientX);
-      applyTrim(edge, t);
-      seek(t);
+      pendingX = e.clientX;
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        if (pendingX === null) return;
+        const t = timeAtClientX(pendingX);
+        applyTrim(edge, t);
+        seek(t);
+      });
     };
     const up = () => {
+      if (raf) cancelAnimationFrame(raf);
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
     };
@@ -847,7 +864,13 @@ export function EditorView({
           }}
         />
 
-        <div className="tl-playhead" style={{ left: pct(current) }} aria-hidden="true" />
+        {/* Full-width layer translated by % of its own width: the per-frame move
+            stays on the compositor instead of re-laying-out the whole timeline. */}
+        <div
+          className="tl-playhead"
+          style={{ transform: `translateX(${(current / Math.max(duration, 0.01)) * 100}%)` }}
+          aria-hidden="true"
+        />
       </div>
 
       <p className="editor-hint">
