@@ -552,6 +552,13 @@ export interface OpenLoomAPI {
   pickFile(filter: string): Promise<string | null>;
   getPermissions(): Promise<PermissionsSnapshot>;
   requestPermission(kind: string): Promise<void>;
+  /**
+   * macOS only: clear the stale Screen Recording entry (TCC pins grants to a
+   * build's code signature, so the System Settings tick can show ON while the
+   * OS refuses the current binary) and open the right settings pane. Resolves
+   * true when the reset ran; false on other platforms or tccutil failure.
+   */
+  resetScreenPermission(): Promise<boolean>;
   openSystemSettings(pane: string): void;
   /** State of the macOS system camera effects (Portrait / Studio Light). */
   cameraEffects(): Promise<CameraEffectsStatus>;

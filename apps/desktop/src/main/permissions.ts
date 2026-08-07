@@ -4,6 +4,7 @@
  * permissions (the OS prompts at getUserMedia time or has no gate).
  */
 import { shell, systemPreferences } from 'electron';
+import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { PermissionsSnapshot, PermissionStatus } from '@shared/types';
@@ -58,6 +59,30 @@ export async function requestPermission(kind: string): Promise<void> {
     // There is no programmatic prompt for Screen Recording; open the pane.
     openSystemSettings('screen');
   }
+}
+
+/**
+ * macOS pins a Screen Recording grant to the exact code signature it approved.
+ * An unsigned build presents a new signature after every update (and macOS
+ * updates can invalidate the stored one too), so System Settings keeps showing
+ * the switch ON while TCC refuses this binary underneath. The only way out is
+ * to clear the stale entry so the user can grant it fresh. tccutil operates on
+ * the calling user's own database and needs no elevation.
+ */
+export async function resetScreenPermission(): Promise<boolean> {
+  if (!isMac) return false;
+  // Matches electron-builder appId. Dev runs are com.github.Electron; resetting
+  // an id with no entry is a harmless no-op, so no isPackaged branch.
+  const bundleId = 'org.openloom.app';
+  const ok = await new Promise<boolean>((resolve) => {
+    execFile('/usr/bin/tccutil', ['reset', 'ScreenCapture', bundleId], (err) => {
+      if (err) log.warn(`tccutil reset ScreenCapture ${bundleId} failed: ${String(err)}`);
+      else log.info(`cleared stale Screen Recording entry for ${bundleId}`);
+      resolve(!err);
+    });
+  });
+  openSystemSettings('screen');
+  return ok;
 }
 
 const MAC_PANES: Record<string, string> = {

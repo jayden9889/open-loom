@@ -276,7 +276,7 @@ function AppInner() {
               </strong>
               <span>
                 {permissions.screen !== 'granted'
-                  ? 'Your recordings are all still here. macOS drops this permission whenever the app is updated - turn it back on to record again.'
+                  ? 'Your recordings are all still here. macOS drops this permission when the app or macOS updates - and the switch can still look on while the OS refuses the app underneath. Reset clears the stale entry: tick Open Loom back on, then quit and reopen.'
                   : 'Open Loom needs ffmpeg to turn captures into playable MP4s.'}
               </span>
             </div>
@@ -290,6 +290,23 @@ function AppInner() {
             >
               {permissions.screen !== 'granted' ? 'Open System Settings' : 'Fix it'}
             </button>
+            {permissions.screen !== 'granted' && navigator.platform.toLowerCase().includes('mac') && (
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  void window.openloom.resetScreenPermission().then((ok) => {
+                    if (ok)
+                      push(
+                        'success',
+                        'Stale entry cleared. Tick Open Loom in the list that just opened, then quit and reopen the app.'
+                      );
+                  });
+                }}
+              >
+                Reset permission
+              </button>
+            )}
             <button
               type="button"
               className="btn-secondary"

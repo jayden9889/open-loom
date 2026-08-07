@@ -282,6 +282,13 @@ all work with sharing set to local only.
 
 - **The recording is black.** macOS Screen Recording permission is off. Open System Settings, then
   Privacy and Security, then Screen and System Audio Recording, enable Open Loom, and restart it.
+- **The permission banner shows even though the switch looks on.** macOS pins the grant to the exact
+  build it approved; app updates (and some macOS updates) invalidate it while the switch still shows
+  ticked. Use the banner's Reset permission button (or untick and retick Open Loom), then quit and
+  reopen. To stop this recurring on unsigned builds, sign the installed app with one long-lived local
+  certificate: `bash scripts/mac-sign-local.sh`. Run it again after each update. This also stops
+  macOS forgetting your stored API keys and YouTube connection (keychain access is pinned to the
+  signature the same way).
 - **No system audio.** Loopback capture needs macOS 14.2 or newer. On older macOS the toggle is
   disabled with an explanation. Your microphone still records.
 - **ffmpeg not found.** Install ffmpeg, or use the Setup screen (or Settings, then About) to download

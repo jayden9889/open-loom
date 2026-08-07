@@ -110,6 +110,7 @@ const api: OpenLoomAPI = {
   cameraEffects: () => ipcRenderer.invoke('ol:cameraEffects'),
   openCameraEffects: () => ipcRenderer.send('ol:openCameraEffects'),
   requestPermission: (kind: string) => ipcRenderer.invoke('ol:requestPermission', kind),
+  resetScreenPermission: () => ipcRenderer.invoke('ol:resetScreenPermission'),
   openSystemSettings: (pane: string) => ipcRenderer.send('ol:openSystemSettings', pane),
   installWhisper: () => ipcRenderer.invoke('ol:installWhisper'),
   onSetupLog: subscribe<string>('ol:setup-log'),

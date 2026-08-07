@@ -8,7 +8,13 @@ import type { RecordingOptions, Settings, VideoMeta } from '@shared/types';
 import { listCaptureSources } from './capture';
 import { library, revealVideo, fileUrl, setCustomThumbnail } from './library';
 import * as recorder from './recorder-ipc';
-import { getPermissions, requestPermission, openSystemSettings, systemAudioSupported } from './permissions';
+import {
+  getPermissions,
+  requestPermission,
+  openSystemSettings,
+  resetScreenPermission,
+  systemAudioSupported,
+} from './permissions';
 import { cameraEffectsStatus, openCameraEffectsPanel } from './camera-effects';
 import { getSettingsMasked, setSettings, getSettings } from './settings';
 import { fetchFfmpeg } from './ffmpeg';
@@ -207,6 +213,7 @@ export function registerIpc(): void {
   });
   handle('ol:getPermissions', () => getPermissions());
   handle('ol:requestPermission', (_e, kind: string) => requestPermission(kind));
+  handle('ol:resetScreenPermission', () => resetScreenPermission());
   ipcMain.on('ol:openSystemSettings', (_e, pane: string) => openSystemSettings(pane));
   handle('ol:cameraEffects', () => cameraEffectsStatus());
   ipcMain.on('ol:openCameraEffects', () => openCameraEffectsPanel());

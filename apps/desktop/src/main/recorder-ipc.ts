@@ -429,7 +429,18 @@ function humanProcessingError(err: unknown): string {
  */
 function maybeAutoShareOnStop(videoId: string): void {
   const settings = getSettings();
-  if (settings.sharing.provider === 'none' || !settings.sharing.autoCopyOnStop) return;
+  const sharing = settings.sharing;
+  if (sharing.provider === 'none' || !sharing.autoCopyOnStop) return;
+  // A provider that was switched on but never configured must not raise an
+  // error toast and a warn line on every single recording; name the gap once.
+  if (sharing.provider === 'server' && !sharing.server.url.trim()) {
+    log.info(`auto-share skipped for ${videoId}: provider is 'server' but no server URL is set`);
+    return;
+  }
+  if (sharing.provider === 's3' && !sharing.s3.bucket.trim()) {
+    log.info(`auto-share skipped for ${videoId}: provider is 's3' but no bucket is set`);
+    return;
+  }
   void shareVideo(videoId)
     .then(({ url }) => {
       clipboard.writeText(url);
