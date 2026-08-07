@@ -67,11 +67,27 @@ export function installUpdater(): void {
         );
         // Being offline, or sitting on a release older than the update feed, is
         // normal operating noise rather than a fault in this run.
-        autoUpdater.on('error', (err) => log.warn(`update check failed: ${firstLine(err)}`));
+        let reported = false;
+        autoUpdater.on('error', (err) => {
+          reported = true;
+          const line = firstLine(err);
+          // A release with no latest-*.yml asset has no update feed at all
+          // (the CI publish job uploads installers only). That is a known
+          // packaging gap on the release side, not a fault in this launch.
+          if (line.includes('Cannot find latest-')) {
+            log.info('update check skipped: the latest release publishes no update feed (latest-*.yml)');
+            return;
+          }
+          log.warn(`update check failed: ${line}`);
+        });
 
         // checkForUpdates rejects with the very error the 'error' handler above
-        // has already reported, so awaiting it here would log everything twice.
-        void autoUpdater.checkForUpdates().catch(() => undefined);
+        // has already reported - except configuration failures (a bundle
+        // packaged without app-update.yml), which reject without ever firing
+        // 'error' and used to disappear without a trace.
+        void autoUpdater.checkForUpdates().catch((err: unknown) => {
+          if (!reported) log.info(`update check did not run: ${firstLine(err)}`);
+        });
       } catch (err) {
         log.warn(`updater did not start: ${firstLine(err)}`);
       }
