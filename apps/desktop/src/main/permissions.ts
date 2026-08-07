@@ -3,7 +3,7 @@
  * macOS uses systemPreferences; Windows/Linux report 'granted' for OS media
  * permissions (the OS prompts at getUserMedia time or has no gate).
  */
-import { shell, systemPreferences } from 'electron';
+import { desktopCapturer, shell, systemPreferences } from 'electron';
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -34,9 +34,41 @@ function whisperAvailable(): boolean {
   return false;
 }
 
-export function getPermissions(): PermissionsSnapshot {
+/**
+ * getMediaAccessStatus('screen') wraps CGPreflightScreenCaptureAccess, which
+ * macOS 15+ is known to answer 'denied' for a build whose capture actually
+ * works (and the reverse after a signature change). The capture pipeline is
+ * the only honest witness: grab one tiny screen thumbnail and look for a
+ * non-black pixel. Only consulted when preflight says anything but granted,
+ * so the happy path costs nothing.
+ */
+async function screenStatus(): Promise<PermissionStatus> {
+  const pre = mediaStatus('screen');
+  if (!isMac || pre === 'granted') return pre;
+  try {
+    const sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize: { width: 32, height: 32 },
+    });
+    const thumb = sources[0]?.thumbnail;
+    if (thumb && !thumb.isEmpty()) {
+      const bmp = thumb.toBitmap();
+      for (let i = 0; i < bmp.length; i += 4) {
+        if (bmp[i] || bmp[i + 1] || bmp[i + 2]) {
+          log.info(`screen permission: preflight says '${pre}' but capture works; treating as granted`);
+          return 'granted';
+        }
+      }
+    }
+  } catch (err) {
+    log.warn(`screen capture probe failed: ${String(err)}`);
+  }
+  return pre;
+}
+
+export async function getPermissions(): Promise<PermissionsSnapshot> {
   return {
-    screen: mediaStatus('screen'),
+    screen: await screenStatus(),
     camera: mediaStatus('camera'),
     mic: mediaStatus('microphone'),
     ffmpeg: ffmpegAvailable(),

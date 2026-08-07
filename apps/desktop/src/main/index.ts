@@ -56,10 +56,9 @@ if (!gotLock) {
     log.info(`Open Loom ready (v${app.getVersion()}, ${process.platform} ${process.getSystemVersion?.() ?? ''})`);
     // One line of TCC truth per launch: "the tick is on but the app says no"
     // is invisible in the UI and has cost real debugging time. See #resetScreenPermission.
-    {
-      const p = getPermissions();
-      log.info(`permissions at boot: screen=${p.screen} camera=${p.camera} mic=${p.mic} ffmpeg=${p.ffmpeg}`);
-    }
+    void getPermissions().then((p) =>
+      log.info(`permissions at boot: screen=${p.screen} camera=${p.camera} mic=${p.mic} ffmpeg=${p.ffmpeg}`)
+    );
     void runTestHooks();
   });
 

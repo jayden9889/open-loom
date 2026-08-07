@@ -16,7 +16,7 @@ export async function runTestHooks(): Promise<void> {
   if (!seconds) return;
 
   log.info(`test-hook: attempting a ${seconds}s screen-only recording`);
-  const perms = getPermissions();
+  const perms = await getPermissions();
   if (process.platform === 'darwin' && perms.screen !== 'granted') {
     log.error(
       `test-hook: BLOCKED-BY-TCC screen permission is '${perms.screen}'. Grant Screen Recording to this binary in System Settings > Privacy & Security > Screen Recording, then rerun.`
