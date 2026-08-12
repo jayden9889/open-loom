@@ -84,6 +84,7 @@ export function defaultSettings(saveDir: string): Settings {
       clientSecret: '',
       refreshToken: '',
       channelTitle: '',
+      scopeVersion: 0,
     },
   };
 }
@@ -143,7 +144,9 @@ export interface SecretCodec {
 /**
  * Walk a settings patch: any plaintext value written to a secret path is
  * encrypted with `codec` (prefixed so we can tell). Writing the mask string
- * is a no-op (keeps the stored value); writing '' clears the secret.
+ * is a no-op (keeps the stored value); writing '' clears the secret. A value
+ * that merely STARTS with the mask is a user who clicked into the masked
+ * field and typed after it - store what they typed, never the mask glyphs.
  */
 export function encryptSecretsInPatch(
   patch: Record<string, unknown>,
@@ -152,14 +155,20 @@ export function encryptSecretsInPatch(
 ): Record<string, unknown> {
   const out = structuredClone(patch);
   for (const path of SECRET_PATHS) {
-    const incoming = getPath(out, path);
-    if (typeof incoming !== 'string') continue;
+    const raw = getPath(out, path);
+    if (typeof raw !== 'string') continue;
+    let incoming: string = raw;
+    if (incoming !== SECRET_MASK && incoming.startsWith(SECRET_MASK)) {
+      incoming = incoming.slice(SECRET_MASK.length);
+    }
     if (incoming === SECRET_MASK) {
       setPath(out, path, getPath(stored, path) ?? '');
     } else if (incoming === '') {
       setPath(out, path, '');
     } else if (!incoming.startsWith(ENC_PREFIX)) {
       setPath(out, path, ENC_PREFIX + codec.encrypt(incoming));
+    } else {
+      setPath(out, path, incoming);
     }
   }
   return out;
@@ -197,4 +206,56 @@ export function decryptSecret(settings: Settings, path: string, codec: SecretCod
   if (typeof value !== 'string' || value === '') return '';
   if (value.startsWith(ENC_PREFIX)) return codec.decrypt(value.slice(ENC_PREFIX.length));
   return value;
+}
+
+// ---------------------------------------------------------------------------
+// Save-folder validation
+//
+// The save folder can live on an external drive that is not always plugged in.
+// When it is gone, the worst response is a raw errno toast over an empty
+// library (reads as data loss) - or worse, quietly mkdir-ing a decoy folder on
+// the boot disk that shadows the real one when the drive returns. These
+// helpers turn "the folder is unusable" into one plain sentence; settings.ts
+// binds them to the filesystem.
+// ---------------------------------------------------------------------------
+
+/**
+ * The mount point a macOS external-drive path lives on ('/Volumes/<drive>'),
+ * or null for paths on the boot disk / other platforms.
+ */
+export function saveDirVolumeRoot(dir: string): string | null {
+  const m = /^\/Volumes\/([^/]+)/.exec(dir);
+  return m ? `/Volumes/${m[1]}` : null;
+}
+
+/** What a filesystem probe of the save folder found. */
+export interface SaveDirProbe {
+  /** The folder itself exists. */
+  exists: boolean;
+  /**
+   * The folder can be used: a test file wrote and removed cleanly (when it
+   * exists), or the nearest existing parent is writable (when it does not -
+   * the library creates a missing folder on demand, so that case is healthy).
+   */
+  writable: boolean;
+  /** For '/Volumes/...' paths: the drive's mount point exists. */
+  volumeMounted: boolean | null;
+}
+
+/**
+ * One plain-English sentence describing why the save folder is unusable, or
+ * null when it is fine. Written for someone who does not know what a mount
+ * point is: name the folder, say what happened, say what to do.
+ */
+export function describeSaveDirProblem(dir: string, probe: SaveDirProbe): string | null {
+  if (probe.volumeMounted === false) {
+    return `Your recordings folder is on a drive that is not connected (${dir}). Reconnect the drive, or choose a new folder in Settings.`;
+  }
+  if (!probe.exists && !probe.writable) {
+    return `Your recordings folder is missing and cannot be created (${dir}). Choose a new folder in Settings.`;
+  }
+  if (probe.exists && !probe.writable) {
+    return `Open Loom cannot write to your recordings folder (${dir}). Check the folder's permissions, or choose a new folder in Settings.`;
+  }
+  return null;
 }

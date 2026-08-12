@@ -20,9 +20,17 @@ export interface ProbeResult {
   fps: number;
   sizeBytes: number;
   videoCodec: string;
+  /** Video pixel format (e.g. 'yuv420p'). Empty when unreported. */
+  videoPixFmt: string;
+  /** Codec profile as reported by ffprobe (e.g. 'High', 'Main'). Empty when unreported. */
+  videoProfile: string;
   audioCodec: string | null;
   /** Audio stream duration, when the container reports one. Null without audio. */
   audioDurationSec: number | null;
+  /** Audio sample rate in Hz. Null without audio or when unreported. */
+  audioSampleRate: number | null;
+  /** Audio channel count. Null without audio or when unreported. */
+  audioChannels: number | null;
 }
 
 const exeSuffix = process.platform === 'win32' ? '.exe' : '';
@@ -170,6 +178,10 @@ export async function probe(bins: FfmpegBinaries, file: string): Promise<ProbeRe
       avg_frame_rate?: string;
       r_frame_rate?: string;
       duration?: string;
+      pix_fmt?: string;
+      profile?: string;
+      sample_rate?: string;
+      channels?: number;
     }[];
   };
   const video = data.streams?.find((s) => s.codec_type === 'video');
@@ -177,6 +189,7 @@ export async function probe(bins: FfmpegBinaries, file: string): Promise<ProbeRe
   const durationSec =
     Number(data.format?.duration) || Number(video?.duration) || 0;
   const audioDurationSec = Number(audio?.duration);
+  const audioSampleRate = Number(audio?.sample_rate);
   return {
     durationSec: Number.isFinite(durationSec) ? Math.round(durationSec * 1000) / 1000 : 0,
     width: video?.width ?? 0,
@@ -184,8 +197,12 @@ export async function probe(bins: FfmpegBinaries, file: string): Promise<ProbeRe
     fps: parseFps(video?.avg_frame_rate) || parseFps(video?.r_frame_rate),
     sizeBytes: Number(data.format?.size) || (fs.existsSync(file) ? fs.statSync(file).size : 0),
     videoCodec: video?.codec_name ?? '',
+    videoPixFmt: video?.pix_fmt ?? '',
+    videoProfile: video?.profile ?? '',
     audioCodec: audio?.codec_name ?? null,
     audioDurationSec: audio && Number.isFinite(audioDurationSec) ? Math.round(audioDurationSec * 1000) / 1000 : null,
+    audioSampleRate: audio && Number.isFinite(audioSampleRate) && audioSampleRate > 0 ? audioSampleRate : null,
+    audioChannels: audio && typeof audio.channels === 'number' && audio.channels > 0 ? audio.channels : null,
   };
 }
 

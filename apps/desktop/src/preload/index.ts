@@ -99,6 +99,8 @@ const api: OpenLoomAPI = {
   youtubeConnect: () => ipcRenderer.invoke('ol:youtubeConnect'),
   youtubeDisconnect: () => ipcRenderer.invoke('ol:youtubeDisconnect'),
   youtubePublish: (videoId: string) => ipcRenderer.invoke('ol:youtubePublish', videoId),
+  youtubeCancelPublish: (videoId: string) => ipcRenderer.invoke('ol:youtubeCancelPublish', videoId),
+  youtubeUnpublish: (videoId: string) => ipcRenderer.invoke('ol:youtubeUnpublish', videoId),
   youtubeOpenStudioEdit: (videoId: string) => ipcRenderer.send('ol:youtubeOpenStudioEdit', videoId),
 
   // settings & system

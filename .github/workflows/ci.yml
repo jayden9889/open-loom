@@ -42,3 +42,30 @@ jobs:
 
       - name: Test
         run: npm test
+
+  # The unit suite covers the pure logic well, but everything that touches
+  # Electron directly is only exercised end to end. A CI runner cannot be
+  # granted macOS Screen Recording, so the capture flows will always skip here.
+  # The boot smoke test needs no permissions, and it is the one that catches a
+  # renderer that no longer starts, which is the regression a user notices first.
+  macos-smoke:
+    name: macOS boot smoke test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      # e2e/skip-reporter.ts fails the run if every test skips, so a green
+      # result here means the boot flow genuinely ran.
+      - name: Boot smoke test
+        run: npx playwright test e2e/app.spec.ts

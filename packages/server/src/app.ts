@@ -38,13 +38,27 @@ export function createServerApp(cfg: ServerConfig): ServerApp {
   const ctx: AppCtx = { db, cfg };
   const app = new Hono();
 
+  // Who may iframe the watch pages, from EMBED_ORIGINS: unset = same origin
+  // only, a list = those origins, '*' = anyone (the pre-policy behaviour).
+  // frame-ancestors is ignored in <meta> CSP by specification, so it MUST be a
+  // real header - without it any site can frame the full watch page, password
+  // prompt included, and clickjack the credential entry.
+  const frameAncestors = cfg.embedOrigins.includes('*')
+    ? '*'
+    : ["'self'", ...cfg.embedOrigins.filter((o) => o !== '*')].join(' ');
+
   // Baseline headers on every response: stop MIME sniffing turning an
   // attacker-supplied upload into script, and keep share URLs (which are the
   // whole access control for an unlisted video) out of third-party referer logs.
+  // Handlers that must never be framed (the password page, /unlock) set their
+  // own frame-ancestors first; only fill in the configured default here.
   app.use('*', async (c, next) => {
     await next();
     c.header('X-Content-Type-Options', 'nosniff');
     c.header('Referrer-Policy', 'no-referrer');
+    if (!c.res.headers.get('Content-Security-Policy')) {
+      c.header('Content-Security-Policy', `frame-ancestors ${frameAncestors}`);
+    }
   });
 
   app.get('/healthz', (c) => c.json({ ok: true, name: 'openloom-server' }));

@@ -144,11 +144,21 @@ export function watchRoutes(
 ): Hono {
   const app = new Hono();
 
+  // A password prompt must never render inside someone else's iframe: an
+  // attacker page could overlay it and harvest the password (clickjacking).
+  // Set regardless of EMBED_ORIGINS; the global middleware leaves it alone.
+  const denyFraming = (c: Context): void => {
+    c.header('Content-Security-Policy', "frame-ancestors 'none'");
+  };
+
   app.get('/:id', (c) => {
     const video = getVideo(ctx.db, c.req.param('id'));
     const embed = isEmbed(c);
     if (!video) return c.html(renderNotFoundPage(), 404);
-    if (!isUnlocked(c, video)) return c.html(renderPasswordPage(video.id, embed), 403);
+    if (!isUnlocked(c, video)) {
+      denyFraming(c);
+      return c.html(renderPasswordPage(video.id, embed), 403);
+    }
     if (video.status !== 'ready' || !fileIfExists(ctx, video, 'video.mp4')) {
       return c.html(renderProcessingPage(video.title, video.id, embed), 200);
     }
@@ -163,6 +173,7 @@ export function watchRoutes(
         allowComments: video.allow_comments === 1,
         allowReactions: video.allow_reactions === 1,
         allowDownload: video.allow_download === 1,
+        requireName: video.require_name === 1,
         cta: video.cta_label && video.cta_url ? { label: video.cta_label, url: video.cta_url } : null,
         chapters: chaptersOf(video),
         hasCaptions: fileIfExists(ctx, video, 'captions.vtt') !== null,
@@ -181,6 +192,7 @@ export function watchRoutes(
   });
 
   app.post('/:id/unlock', async (c) => {
+    denyFraming(c);
     const video = getVideo(ctx.db, c.req.param('id'));
     if (!video) return c.json({ error: 'Video not found.' }, 404);
     if (video.privacy !== 'password' || !video.password_hash) {

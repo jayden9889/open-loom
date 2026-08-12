@@ -20,6 +20,7 @@ export interface VideoRow {
   allow_comments: 0 | 1;
   allow_reactions: 0 | 1;
   allow_download: 0 | 1;
+  require_name: 0 | 1;
   cta_label: string | null;
   cta_url: string | null;
   chapters_json: string | null;
@@ -72,6 +73,7 @@ CREATE TABLE IF NOT EXISTS videos (
   allow_comments      INTEGER NOT NULL DEFAULT 1,
   allow_reactions     INTEGER NOT NULL DEFAULT 1,
   allow_download      INTEGER NOT NULL DEFAULT 1,
+  require_name        INTEGER NOT NULL DEFAULT 0,
   cta_label           TEXT,
   cta_url             TEXT,
   chapters_json       TEXT,
@@ -117,7 +119,16 @@ export function openDb(file: string): Database {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   db.exec(SCHEMA);
+  migrate(db);
   return db;
+}
+
+/** Additive column migrations for databases created before the column existed. */
+function migrate(db: Database): void {
+  const columns = (db.prepare('PRAGMA table_info(videos)').all() as { name: string }[]).map((c) => c.name);
+  if (!columns.includes('require_name')) {
+    db.exec('ALTER TABLE videos ADD COLUMN require_name INTEGER NOT NULL DEFAULT 0');
+  }
 }
 
 export function getVideo(db: Database, id: string): VideoRow | null {

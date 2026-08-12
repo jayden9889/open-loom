@@ -9,9 +9,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { JobProgress } from '@shared/types';
 import * as core from './ffmpeg-core';
+import { EditCancelledError } from './editor-core';
 import { getSettings, appBinDir } from './settings';
 import { log } from './logger';
 import { broadcast } from './windows';
+import { takeVideoLock, releaseVideoLock, videoLockHolder } from './video-lock';
 
 export { probe, remux, transcodeH264, thumbnail, gifPreview, waveformPeaks, canRemux, extractAudioWav, detectSilences } from './ffmpeg-core';
 export type { FfmpegBinaries, ProbeResult, SilenceRange } from './ffmpeg-core';
@@ -74,13 +76,17 @@ export async function ensureFfmpeg(context: 'launch' | 'record' = 'record'): Pro
 interface QueuedJob {
   videoId: string;
   kind: string;
-  fn: (report: (pct: number, note?: string) => void) => Promise<void>;
+  fn: (report: (pct: number, note?: string) => void, signal: AbortSignal) => Promise<void>;
+  controller: AbortController;
   resolve: () => void;
   reject: (err: unknown) => void;
 }
 
 const queue: QueuedJob[] = [];
-let running = false;
+let running: QueuedJob | null = null;
+
+/** Job kinds that rewrite video.mp4 and therefore hold the per-video edit lock. */
+const EDIT_KINDS = new Set(['trim', 'stitch', 'revert']);
 
 export function emitJobProgress(j: JobProgress): void {
   broadcast('ol:job-progress', j);
@@ -89,35 +95,62 @@ export function emitJobProgress(j: JobProgress): void {
 export function enqueueJob(
   videoId: string,
   kind: string,
-  fn: (report: (pct: number, note?: string) => void) => Promise<void>
+  fn: (report: (pct: number, note?: string) => void, signal: AbortSignal) => Promise<void>
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
-    queue.push({ videoId, kind, fn, resolve, reject });
+    queue.push({ videoId, kind, fn, controller: new AbortController(), resolve, reject });
     void pump();
   });
+}
+
+/**
+ * Abort the running or queued jobs for a video. The running ffmpeg child gets
+ * SIGTERM via its AbortSignal; queued jobs reject before they start.
+ */
+export function cancelJob(videoId: string): void {
+  for (const job of queue) {
+    if (job.videoId === videoId) job.controller.abort();
+  }
+  if (running?.videoId === videoId) running.controller.abort();
+}
+
+/** True while any job is running or queued; the quit guard consults this. */
+export function jobsActive(): boolean {
+  return running !== null || queue.length > 0;
 }
 
 async function pump(): Promise<void> {
   if (running) return;
   const job = queue.shift();
   if (!job) return;
-  running = true;
+  running = job;
   const report = (pct: number, note?: string) =>
     emitJobProgress({ videoId: job.videoId, kind: job.kind, pct, note });
+  const lockKind = EDIT_KINDS.has(job.kind) ? 'edit' : null;
   try {
+    if (job.controller.signal.aborted) throw new EditCancelledError();
+    // Rewriting video.mp4 under an in-flight upload corrupts the hosted copy;
+    // the lock turns that race into a plain-English refusal.
+    if (lockKind) takeVideoLock(job.videoId, lockKind);
     report(0);
-    await job.fn(report);
+    await job.fn(report, job.controller.signal);
     report(100);
     job.resolve();
   } catch (err) {
-    log.error(`ffmpeg job ${job.kind} for ${job.videoId} failed: ${String(err)}`);
-    // A terminal event is what clears the renderer's "job running" state. Without
-    // it a failed transcribe left the panel spinning forever with its retry
-    // button disabled. The AI and share producers already emit one on failure.
-    report(100, `${job.kind} failed`);
+    if (err instanceof EditCancelledError) {
+      log.info(`ffmpeg job ${job.kind} for ${job.videoId} cancelled`);
+      report(100, `${job.kind} cancelled`);
+    } else {
+      log.error(`ffmpeg job ${job.kind} for ${job.videoId} failed: ${String(err)}`);
+      // A terminal event is what clears the renderer's "job running" state. Without
+      // it a failed transcribe left the panel spinning forever with its retry
+      // button disabled. The AI and share producers already emit one on failure.
+      report(100, `${job.kind} failed`);
+    }
     job.reject(err);
   } finally {
-    running = false;
+    if (lockKind && videoLockHolder(job.videoId) === lockKind) releaseVideoLock(job.videoId, lockKind);
+    running = null;
     void pump();
   }
 }

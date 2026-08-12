@@ -21,6 +21,8 @@ import {
   pkcePair,
   randomToken,
   YT_CHANNELS_ENDPOINT,
+  YT_REVOKE_ENDPOINT,
+  YT_SCOPE_VERSION,
   YT_TOKEN_ENDPOINT,
 } from './youtube-core';
 import { log } from './logger';
@@ -162,8 +164,16 @@ async function resolveOwnChannel(
   }
 }
 
-/** Run the consent flow and persist the refresh token. Returns the new state. */
-export async function connect(): Promise<{ connected: boolean; channel: string }> {
+/**
+ * Run the consent flow and persist the refresh token. Returns the new state;
+ * `channelLookupFailed` is true when the token stored fine but the channel
+ * lookup did not answer, so the caller can warn instead of showing a blank.
+ */
+export async function connect(): Promise<{
+  connected: boolean;
+  channel: string;
+  channelLookupFailed?: boolean;
+}> {
   const { clientId, clientSecret } = requireClient();
   const { verifier, challenge } = pkcePair();
   const state = randomToken(16);
@@ -196,12 +206,14 @@ export async function connect(): Promise<{ connected: boolean; channel: string }
   const channelTitle = channel === 'lookup-failed' ? '' : channel.title;
 
   // Deep-merged + encrypted by the settings layer; clientId/secret untouched.
+  // scopeVersion records which YT_SCOPE generation this consent covered, so a
+  // later scope widening can prompt exactly the tokens that predate it.
   setSettings({
-    youtube: { refreshToken: tokens.refresh_token, channelTitle },
+    youtube: { refreshToken: tokens.refresh_token, channelTitle, scopeVersion: YT_SCOPE_VERSION },
   } as Partial<Settings>);
   accessCache = { token: tokens.access_token, expiresAt: Date.now() + (tokens.expires_in - 60) * 1000 };
   log.info(`youtube: account connected${channelTitle ? ` (channel: ${channelTitle})` : ''}`);
-  return { connected: true, channel: channelTitle };
+  return { connected: true, channel: channelTitle, channelLookupFailed: channel === 'lookup-failed' };
 }
 
 /** A valid access token, refreshing via the stored refresh token when needed. */
@@ -220,10 +232,44 @@ export async function getAccessToken(): Promise<string> {
   return tokens.access_token;
 }
 
-/** Forget the stored tokens (does not revoke server-side). */
-export function disconnect(): { connected: boolean } {
+/**
+ * Drop the cached access token so the next getAccessToken() mints a fresh one.
+ * The mid-upload 401 recovery calls this: an upload that outlives the token's
+ * hour would otherwise die near the end with wrong reconnect advice.
+ */
+export function invalidateAccessToken(): void {
   accessCache = null;
-  setSettings({ youtube: { refreshToken: '', channelTitle: '' } } as Partial<Settings>);
-  log.info('youtube: account disconnected');
-  return { connected: false };
+}
+
+/**
+ * Forget the stored tokens, revoking the refresh token at Google first so the
+ * grant really is withdrawn (a cleared local copy alone stays valid at Google
+ * indefinitely). Revoke failure is non-fatal - local state clears either way -
+ * but `revoked` tells the caller which of the two actually happened.
+ */
+export async function disconnect(): Promise<{ connected: boolean; revoked: boolean }> {
+  let revoked = false;
+  let refreshToken = '';
+  try {
+    refreshToken = getSecret('youtube.refreshToken').trim();
+  } catch {
+    // Keychain refused this build; there is nothing readable to revoke.
+  }
+  if (refreshToken) {
+    try {
+      const res = await fetch(YT_REVOKE_ENDPOINT, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ token: refreshToken }).toString(),
+      });
+      revoked = res.ok;
+      if (!res.ok) log.warn(`youtube: revoking the token at Google failed (HTTP ${res.status})`);
+    } catch (err) {
+      log.warn(`youtube: revoking the token at Google failed: ${String(err)}`);
+    }
+  }
+  accessCache = null;
+  setSettings({ youtube: { refreshToken: '', channelTitle: '', scopeVersion: 0 } } as Partial<Settings>);
+  log.info(`youtube: account disconnected (${revoked ? 'revoked at Google' : 'cleared locally only'})`);
+  return { connected: false, revoked };
 }

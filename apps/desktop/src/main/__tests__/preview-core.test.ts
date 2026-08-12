@@ -15,7 +15,11 @@ describe('generatePreviews', () => {
     const waveform = vi.fn().mockRejectedValue(new Error('waveform OOM'));
     const warn = vi.fn();
 
-    await expect(generatePreviews({ thumbnail, gif, waveform, warn })).resolves.toBeUndefined();
+    // Resolves rather than throwing, and names the steps that failed so the
+    // caller can record them on the video and offer a retry.
+    await expect(generatePreviews({ thumbnail, gif, waveform, warn })).resolves.toEqual([
+      'waveform',
+    ]);
 
     // The failing step does not abort the others.
     expect(thumbnail).toHaveBeenCalledTimes(1);

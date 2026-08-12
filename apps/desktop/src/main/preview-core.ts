@@ -15,22 +15,29 @@ export interface PreviewSteps {
 
 /**
  * Run every preview step, isolating each so one failure never aborts the
- * others and never throws. Always resolves.
+ * others and never throws. Always resolves, with the names of the steps that
+ * failed so a caller can surface them (a blank card with no explanation is a
+ * bug report waiting to happen); the post-recording pass ignores the return.
  */
-export async function generatePreviews(steps: PreviewSteps): Promise<void> {
+export async function generatePreviews(steps: PreviewSteps): Promise<string[]> {
+  const failed: string[] = [];
   try {
     await steps.thumbnail();
   } catch (err) {
+    failed.push('thumbnail');
     steps.warn(`thumbnail generation failed: ${err instanceof Error ? err.message : String(err)}`);
   }
   try {
     await steps.gif();
   } catch (err) {
+    failed.push('gif');
     steps.warn(`gif preview generation failed: ${err instanceof Error ? err.message : String(err)}`);
   }
   try {
     await steps.waveform();
   } catch (err) {
+    failed.push('waveform');
     steps.warn(`waveform generation failed: ${err instanceof Error ? err.message : String(err)}`);
   }
+  return failed;
 }

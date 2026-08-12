@@ -9,6 +9,8 @@ import {
   buildAuthUrl,
   buildVideoInsertMetadata,
   contentRange,
+  isQuotaError,
+  isSessionReusable,
   parseLoopbackCallback,
   parseOwnChannel,
   parseResumeOffset,
@@ -16,6 +18,9 @@ import {
   pkcePair,
   queryRange,
   randomToken,
+  SESSION_MAX_AGE_MS,
+  videosDeleteUrl,
+  YT_SCOPE_VERSION,
   studioEditUrl,
   UPLOAD_CHUNK_BYTES,
   watchUrl,
@@ -228,10 +233,72 @@ describe('buildVideoInsertMetadata', () => {
 });
 
 describe('YT_SCOPE', () => {
-  it('requests upload plus readonly (readonly powers the connect-time channel check)', () => {
+  it('requests force-ssl plus readonly (force-ssl covers upload AND videos.delete; readonly powers the connect-time channel check)', () => {
     const scopes = YT_SCOPE.split(' ');
-    expect(scopes).toContain('https://www.googleapis.com/auth/youtube.upload');
+    expect(scopes).toContain('https://www.googleapis.com/auth/youtube.force-ssl');
     expect(scopes).toContain('https://www.googleapis.com/auth/youtube.readonly');
+    // The narrower upload scope cannot delete videos; it must not creep back in.
+    expect(scopes).not.toContain('https://www.googleapis.com/auth/youtube.upload');
+  });
+
+  it('carries a scope version >= 2 so pre-widening tokens can be told apart', () => {
+    expect(YT_SCOPE_VERSION).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('videosDeleteUrl', () => {
+  it('targets videos.delete with the id as a query param', () => {
+    expect(videosDeleteUrl(ID)).toBe(`https://www.googleapis.com/youtube/v3/videos?id=${ID}`);
+  });
+  it('URL-encodes the id defensively', () => {
+    expect(videosDeleteUrl('a b')).toBe('https://www.googleapis.com/youtube/v3/videos?id=a%20b');
+  });
+});
+
+describe('isQuotaError', () => {
+  it('matches the 403 quotaExceeded family', () => {
+    expect(isQuotaError(403, 'The request cannot be completed because you have exceeded your quota.')).toBe(true);
+    expect(isQuotaError(403, 'quotaExceeded')).toBe(true);
+  });
+  it('matches the 400 uploadLimitExceeded daily upload cap', () => {
+    expect(isQuotaError(400, 'The user has exceeded the number of videos they may upload. (uploadLimitExceeded)')).toBe(true);
+    expect(isQuotaError(400, 'uploadLimit reached')).toBe(true);
+  });
+  it('does not match other errors on those statuses', () => {
+    expect(isQuotaError(403, 'insufficient permissions')).toBe(false);
+    expect(isQuotaError(400, 'invalidTitle')).toBe(false);
+  });
+  it('does not match quota wording on unrelated statuses', () => {
+    expect(isQuotaError(500, 'quota')).toBe(false);
+    expect(isQuotaError(401, 'uploadLimitExceeded')).toBe(false);
+  });
+});
+
+describe('isSessionReusable', () => {
+  const NOW = Date.parse('2026-08-12T12:00:00Z');
+  const pending = {
+    sessionUri: 'https://upload.example/session',
+    total: 1000,
+    startedAt: '2026-08-11T12:00:00Z',
+  };
+
+  it('accepts a fresh session whose byte count matches the file', () => {
+    expect(isSessionReusable(pending, 1000, NOW)).toBe(true);
+  });
+  it('rejects when the file size changed (the declared length is committed at session start)', () => {
+    expect(isSessionReusable(pending, 999, NOW)).toBe(false);
+  });
+  it('rejects a session older than the 7-day lifetime', () => {
+    expect(isSessionReusable(pending, 1000, Date.parse(pending.startedAt) + SESSION_MAX_AGE_MS)).toBe(false);
+    expect(isSessionReusable(pending, 1000, Date.parse(pending.startedAt) + SESSION_MAX_AGE_MS - 1)).toBe(true);
+  });
+  it('rejects a missing marker, an empty session uri and an unparseable start time', () => {
+    expect(isSessionReusable(undefined, 1000, NOW)).toBe(false);
+    expect(isSessionReusable({ ...pending, sessionUri: '' }, 1000, NOW)).toBe(false);
+    expect(isSessionReusable({ ...pending, startedAt: 'garbage' }, 1000, NOW)).toBe(false);
+  });
+  it('rejects a start time in the future (clock skew reads as not trustworthy)', () => {
+    expect(isSessionReusable({ ...pending, startedAt: '2026-08-13T12:00:00Z' }, 1000, NOW)).toBe(false);
   });
 });
 

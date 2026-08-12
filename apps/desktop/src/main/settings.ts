@@ -4,6 +4,7 @@
  */
 import { app, safeStorage } from 'electron';
 import Store from 'electron-store';
+import fs from 'node:fs';
 import path from 'node:path';
 import type { Settings } from '@shared/types';
 import { DEFAULT_SHORTCUTS, LEGACY_DRAW_SHORTCUT } from '@shared/types';
@@ -14,6 +15,8 @@ import {
   maskSecrets,
   decryptSecret,
   hasStoredSecret,
+  describeSaveDirProblem,
+  saveDirVolumeRoot,
   type SecretCodec,
 } from './settings-core';
 import { log } from './logger';
@@ -146,4 +149,44 @@ function applyLaunchAtLogin(enabled: boolean): void {
 /** App-support bin dir where fetched ffmpeg/ffprobe binaries land. */
 export function appBinDir(): string {
   return path.join(app.getPath('userData'), 'bin');
+}
+
+/**
+ * Why the save folder (or a candidate for it) is unusable right now, as one
+ * plain sentence - or null when it is fine. Deliberately never creates the
+ * folder: mkdir-ing a missing '/Volumes/...' path would plant a decoy on the
+ * boot disk that shadows the real library when the drive is remounted.
+ */
+export function saveDirProblem(dir: string = getSettings().saveDir): string | null {
+  const volumeRoot = saveDirVolumeRoot(dir);
+  const exists = fs.existsSync(dir);
+  let writable = false;
+  if (exists) {
+    const testFile = path.join(dir, `.openloom-write-test-${process.pid}`);
+    try {
+      fs.writeFileSync(testFile, '');
+      fs.rmSync(testFile);
+      writable = true;
+    } catch {
+      writable = false;
+    }
+  } else {
+    // A missing folder is healthy when it can be created on demand (the
+    // library mkdirs it on first use): check the nearest existing parent.
+    let parent = path.dirname(dir);
+    while (parent !== path.dirname(parent) && !fs.existsSync(parent)) {
+      parent = path.dirname(parent);
+    }
+    try {
+      fs.accessSync(parent, fs.constants.W_OK);
+      writable = true;
+    } catch {
+      writable = false;
+    }
+  }
+  return describeSaveDirProblem(dir, {
+    exists,
+    writable,
+    volumeMounted: volumeRoot ? fs.existsSync(volumeRoot) : null,
+  });
 }

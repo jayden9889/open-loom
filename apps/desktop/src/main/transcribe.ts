@@ -15,7 +15,11 @@ import { VIDEO_FILES } from '@shared/types';
 import { getSettings, getSecret, setSettings } from './settings';
 import { library } from './library';
 import * as ffmpeg from './ffmpeg';
-import { createOpenAiEngine, createWhisperEngine, runTranscriptionPipeline } from './transcribe-core';
+import {
+  createOpenAiEngine,
+  createWhisperEngine,
+  runTranscriptionPipeline,
+} from './transcribe-core';
 import { log } from './logger';
 import { maybeAutoGenerateAI } from './ai';
 import { syncShareCaptions } from './share';

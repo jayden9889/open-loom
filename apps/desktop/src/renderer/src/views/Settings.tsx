@@ -284,6 +284,7 @@ export function SettingsView({
   // YouTube account connection (OAuth loopback runs in the main process).
   const [ytConnected, setYtConnected] = useState<boolean | null>(null);
   const [ytChannel, setYtChannel] = useState('');
+  const [ytNeedsReconnect, setYtNeedsReconnect] = useState(false);
   const [ytBusy, setYtBusy] = useState(false);
   useEffect(() => {
     if (pane !== 'youtube') return;
@@ -291,6 +292,7 @@ export function SettingsView({
       (v) => {
         setYtConnected(v.connected);
         setYtChannel(v.channel);
+        setYtNeedsReconnect(v.needsReconnect);
       },
       () => setYtConnected(null)
     );
@@ -302,9 +304,18 @@ export function SettingsView({
       (v) => {
         setYtConnected(v.connected);
         setYtChannel(v.channel);
+        setYtNeedsReconnect(false);
         setYtBusy(false);
         if (v.connected) {
           push('success', v.channel ? `YouTube connected: ${v.channel}` : 'YouTube account connected.');
+          if (v.channelLookupFailed) {
+            // The token stored fine but the channel name could not be read -
+            // worth a heads-up rather than a silently blank channel.
+            push(
+              'info',
+              'Could not confirm which channel this account uploads to. If publishing fails, disconnect and reconnect.'
+            );
+          }
         }
       },
       (err) => {
@@ -320,8 +331,17 @@ export function SettingsView({
       (v) => {
         setYtConnected(v.connected);
         setYtChannel('');
+        setYtNeedsReconnect(false);
         setYtBusy(false);
-        push('info', 'YouTube account disconnected.');
+        // Two different outcomes: say which one actually happened.
+        if (v.revoked) {
+          push('info', 'YouTube account disconnected. Open Loom’s access was revoked at Google.');
+        } else {
+          push(
+            'info',
+            'YouTube account disconnected from Open Loom, but Google could not be reached to withdraw the old permission. You can remove it yourself at myaccount.google.com under Security.'
+          );
+        }
       },
       (err) => {
         setYtBusy(false);
@@ -1114,6 +1134,16 @@ export function SettingsView({
                   )}
                 </div>
               </Row>
+              {ytConnected && ytNeedsReconnect && (
+                <Row
+                  label="Reconnect needed"
+                  note="Your saved sign-in predates the permission that lets Open Loom remove videos from YouTube. Reconnect once to enable it - publishing keeps working either way."
+                >
+                  <button type="button" className="btn-secondary" disabled={ytBusy} onClick={connectYouTube}>
+                    {ytBusy ? 'Connecting…' : 'Reconnect to enable removing videos'}
+                  </button>
+                </Row>
+              )}
               <p className="settings-note">
                 New uploads land unlisted only once your Google Cloud project passes YouTube&apos;s API
                 compliance audit. Until then they upload as private and the video page shows a one-click

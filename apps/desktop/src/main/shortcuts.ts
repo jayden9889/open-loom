@@ -84,15 +84,32 @@ export function validateShortcuts(shortcuts: ShortcutSettings): string | null {
   return null;
 }
 
+/**
+ * Shortcuts the OS refused on the last apply (already owned by another app,
+ * or an accelerator it would not parse). The Settings pane reads this so a
+ * dead Stop Recording key is a visible warning, not a green toast: during a
+ * full-screen recording that hotkey is the primary way to end the take.
+ */
+let registrationFailures: Partial<Record<keyof ShortcutSettings, string>> = {};
+
+export function getShortcutFailures(): Partial<Record<keyof ShortcutSettings, string>> {
+  return { ...registrationFailures };
+}
+
 export function applyShortcuts(): void {
   globalShortcut.unregisterAll();
+  registrationFailures = {};
   const shortcuts = getSettings().shortcuts;
   for (const [name, accel] of Object.entries(shortcuts) as [keyof ShortcutSettings, string][]) {
     if (!accel) continue;
     try {
       const ok = globalShortcut.register(accel, ACTIONS[name]);
-      if (!ok) log.warn(`shortcut ${name} (${accel}) is taken by another app`);
+      if (!ok) {
+        registrationFailures[name] = accel;
+        log.warn(`shortcut ${name} (${accel}) is taken by another app`);
+      }
     } catch (err) {
+      registrationFailures[name] = accel;
       log.warn(`shortcut ${name} (${accel}) failed to register: ${String(err)}`);
     }
   }

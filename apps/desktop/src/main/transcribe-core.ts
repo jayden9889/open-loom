@@ -110,6 +110,58 @@ export function retimeSegments(
   return out.sort((a, b) => a.start - b.start);
 }
 
+/**
+ * A transcript that could not be re-timed is set aside under these names
+ * instead of being deleted: the user may have paid an API for it, and a
+ * mis-timed copy on disk beats silent destruction. A later successful
+ * transcription cleans them up.
+ */
+export const STALE_TRANSCRIPT_JSON = 'transcript.stale.json';
+export const STALE_CAPTIONS_VTT = 'transcript.stale.vtt';
+
+export type TranscriptRetimeOutcome =
+  | { status: 'absent' }
+  | { status: 'retimed'; segments: TranscriptSegment[] }
+  | { status: 'failed'; error: string };
+
+/**
+ * Re-time transcript.json + transcript.vtt in `dir` onto a trimmed timeline.
+ * A transcript that cannot be re-timed (corrupt JSON) is renamed to the
+ * `.stale` names rather than deleted, so the failure is recoverable and the
+ * caller can tell the user what happened instead of the files just vanishing.
+ */
+export function applyTranscriptRetime(
+  dir: string,
+  ranges: { start: number; end: number }[]
+): TranscriptRetimeOutcome {
+  const jsonPath = path.join(dir, 'transcript.json');
+  if (!fs.existsSync(jsonPath)) return { status: 'absent' };
+  try {
+    const data = JSON.parse(fs.readFileSync(jsonPath, 'utf8')) as {
+      segments?: TranscriptSegment[];
+    };
+    const retimed = retimeSegments(data.segments ?? [], ranges);
+    fs.writeFileSync(jsonPath, JSON.stringify({ ...data, segments: retimed }, null, 2));
+    fs.writeFileSync(path.join(dir, 'transcript.vtt'), buildVtt(retimed));
+    return { status: 'retimed', segments: retimed };
+  } catch (err) {
+    for (const [live, stale] of [
+      ['transcript.json', STALE_TRANSCRIPT_JSON],
+      ['transcript.vtt', STALE_CAPTIONS_VTT],
+    ] as const) {
+      const from = path.join(dir, live);
+      if (fs.existsSync(from)) fs.renameSync(from, path.join(dir, stale));
+    }
+    return { status: 'failed', error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** Remove set-aside stale transcript files (called after a fresh transcription lands). */
+export function cleanStaleTranscriptFiles(dir: string): void {
+  fs.rmSync(path.join(dir, STALE_TRANSCRIPT_JSON), { force: true });
+  fs.rmSync(path.join(dir, STALE_CAPTIONS_VTT), { force: true });
+}
+
 // ---------------------------------------------------------------------------
 // Segment hygiene
 // ---------------------------------------------------------------------------
@@ -193,6 +245,23 @@ export interface WhisperEngineConfig {
 }
 
 /**
+ * whisper.cpp `.en` models silently ignore the language flag and emit English
+ * gibberish for other languages, so a non-English request on one must fail
+ * loudly instead (the guided installer only ships base.en today).
+ */
+export function whisperModelIsEnglishOnly(modelPath: string): boolean {
+  return /\.en(-[^.]+)?\.bin$/i.test(path.basename(modelPath));
+}
+
+/** Plain-language error for a language the resolved whisper model cannot do, or null when fine. */
+export function whisperLanguageProblem(modelPath: string, language: string): string | null {
+  const lang = language.trim().toLowerCase();
+  if (!lang || lang === 'auto' || lang === 'en' || lang === 'english') return null;
+  if (!whisperModelIsEnglishOnly(modelPath)) return null;
+  return `The installed whisper model is English-only, so it cannot transcribe "${language}". Use the API endpoint engine, or point Settings at a multilingual whisper model (e.g. ggml-base.bin).`;
+}
+
+/**
  * Short flags only: they are identical across whisper.cpp's old `main` and
  * the current `whisper-cli` binaries (-oj json out, -of prefix, -pp progress,
  * -np quiet).
@@ -212,18 +281,26 @@ export function buildWhisperArgs(cfg: WhisperEngineConfig, audioPath: string, la
 export function createWhisperEngine(cfg: WhisperEngineConfig): TranscriptionProvider {
   return {
     engine: 'whisper',
-    async transcribe(audioPath, language, onProgress): Promise<TranscriptResult> {
+    async transcribe(audioPath, language, onProgress, signal): Promise<TranscriptResult> {
       if (!fs.existsSync(cfg.binaryPath)) {
         throw new Error('whisper-cli was not found. Install whisper.cpp from Settings or set its path.');
       }
       if (!fs.existsSync(cfg.modelPath)) {
         throw new Error('The whisper model file was not found. Install whisper.cpp from Settings or set the model path.');
       }
+      const languageProblem = whisperLanguageProblem(cfg.modelPath, language);
+      if (languageProblem) throw new Error(languageProblem);
       const outPrefix = path.join(path.dirname(audioPath), 'whisper-out');
       const args = buildWhisperArgs(cfg, audioPath, language, outPrefix);
 
       await new Promise<void>((resolve, reject) => {
+        if (signal?.aborted) {
+          reject(new Error('Transcription was cancelled.'));
+          return;
+        }
         const child = spawn(cfg.binaryPath, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+        const onAbort = () => child.kill();
+        signal?.addEventListener('abort', onAbort, { once: true });
         let tail = '';
         const feed = (chunk: Buffer) => {
           const text = chunk.toString('utf8');
@@ -235,9 +312,14 @@ export function createWhisperEngine(cfg: WhisperEngineConfig): TranscriptionProv
         };
         child.stdout.on('data', feed);
         child.stderr.on('data', feed);
-        child.on('error', (err) => reject(new Error(`Could not run whisper-cli: ${err.message}`)));
+        child.on('error', (err) => {
+          signal?.removeEventListener('abort', onAbort);
+          reject(new Error(`Could not run whisper-cli: ${err.message}`));
+        });
         child.on('close', (code) => {
-          if (code === 0) resolve();
+          signal?.removeEventListener('abort', onAbort);
+          if (signal?.aborted) reject(new Error('Transcription was cancelled.'));
+          else if (code === 0) resolve();
           else reject(new Error(`whisper-cli exited with code ${code}: ${tail.trim().slice(-500)}`));
         });
       });
@@ -280,34 +362,69 @@ export function normalizeTranscriptionEndpoint(endpoint: string): string {
   return `${trimmed}/v1/audio/transcriptions`;
 }
 
+/** OpenAI-compatible endpoints reject uploads over 25 MB. */
+export const API_UPLOAD_LIMIT_BYTES = 25 * 1024 * 1024;
+
+/** MIME type for the multipart upload, by audio file extension. */
+export function audioMimeType(audioPath: string): string {
+  switch (path.extname(audioPath).toLowerCase()) {
+    case '.mp3':
+      return 'audio/mpeg';
+    case '.ogg':
+    case '.opus':
+      return 'audio/ogg';
+    case '.m4a':
+      return 'audio/mp4';
+    default:
+      return 'audio/wav';
+  }
+}
+
+/**
+ * Plain-language message when the extracted audio is too large for the API
+ * engine, or null when it fits. Says what to do instead of passing through the
+ * provider's eventual 413.
+ */
+export function describeOversizedUpload(sizeBytes: number, durationSec: number): string | null {
+  if (sizeBytes <= API_UPLOAD_LIMIT_BYTES) return null;
+  const minutes = Math.max(1, Math.round(durationSec / 60));
+  const fitsMinutes = Math.max(1, Math.floor((durationSec * API_UPLOAD_LIMIT_BYTES) / sizeBytes / 60));
+  return `This recording is about ${minutes} minutes long and its audio comes to ${Math.round(sizeBytes / 1024 / 1024)} MB, but the transcription endpoint accepts uploads up to 25 MB (roughly ${fitsMinutes} minutes at this quality). Use the whisper.cpp engine for long recordings, or trim the video first.`;
+}
+
 export function createOpenAiEngine(cfg: OpenAiEngineConfig): TranscriptionProvider {
   const doFetch = cfg.fetchImpl ?? fetch;
   return {
     engine: 'openai',
-    async transcribe(audioPath, language, onProgress): Promise<TranscriptResult> {
+    async transcribe(audioPath, language, onProgress, signal): Promise<TranscriptResult> {
       if (!cfg.endpoint.trim()) {
         throw new Error('Set the transcription endpoint URL in Settings first.');
       }
       const url = normalizeTranscriptionEndpoint(cfg.endpoint);
       const audio = fs.readFileSync(audioPath);
+      const oversized = describeOversizedUpload(audio.byteLength, cfg.audioDurationSec);
+      if (oversized) throw new Error(oversized);
       const form = new FormData();
-      form.set('file', new Blob([new Uint8Array(audio)], { type: 'audio/wav' }), path.basename(audioPath));
+      form.set('file', new Blob([new Uint8Array(audio)], { type: audioMimeType(audioPath) }), path.basename(audioPath));
       form.set('model', cfg.model || 'whisper-1');
       form.set('response_format', 'verbose_json');
       if (language && language !== 'auto') form.set('language', language);
 
-      onProgress(15);
+      // Plain fetch gives no upload progress, so the notes are honest phases
+      // rather than an invented percentage climb.
+      onProgress(15, 'Uploading audio');
       const headers: Record<string, string> = {};
       if (cfg.apiKey) headers['Authorization'] = `Bearer ${cfg.apiKey}`;
       let res: Response;
       try {
-        res = await doFetch(url, { method: 'POST', headers, body: form });
+        res = await doFetch(url, { method: 'POST', headers, body: form, signal });
       } catch (err) {
+        if (signal?.aborted) throw new Error('Transcription was cancelled.');
         throw new Error(
           `Could not reach the transcription endpoint (${url}): ${err instanceof Error ? err.message : String(err)}`
         );
       }
-      onProgress(80);
+      onProgress(80, 'Waiting for the transcription service');
       const body = await res.text();
       if (!res.ok) {
         throw new Error(`The transcription endpoint returned ${res.status}: ${body.slice(0, 300)}`);
@@ -322,6 +439,69 @@ export function createOpenAiEngine(cfg: OpenAiEngineConfig): TranscriptionProvid
       };
     },
   };
+}
+
+/**
+ * A minimal 16kHz mono PCM WAV of silence, built in memory for the Settings
+ * "Test connection" probe (no ffmpeg or temp file needed).
+ */
+export function buildSilentWav(durationSec: number): Buffer {
+  const sampleRate = 16000;
+  const samples = Math.max(1, Math.round(durationSec * sampleRate));
+  const dataBytes = samples * 2;
+  const buf = Buffer.alloc(44 + dataBytes);
+  buf.write('RIFF', 0);
+  buf.writeUInt32LE(36 + dataBytes, 4);
+  buf.write('WAVE', 8);
+  buf.write('fmt ', 12);
+  buf.writeUInt32LE(16, 16);
+  buf.writeUInt16LE(1, 20); // PCM
+  buf.writeUInt16LE(1, 22); // mono
+  buf.writeUInt32LE(sampleRate, 24);
+  buf.writeUInt32LE(sampleRate * 2, 28); // byte rate
+  buf.writeUInt16LE(2, 32); // block align
+  buf.writeUInt16LE(16, 34); // bits per sample
+  buf.write('data', 36);
+  buf.writeUInt32LE(dataBytes, 40);
+  return buf;
+}
+
+/**
+ * Settings "Test connection" for the API engine: posts one second of silence
+ * to the configured endpoint and reports pass/fail. Mirrors ai-core's
+ * testConnection so the transcription pane can verify its config before a
+ * real recording depends on it.
+ */
+export async function testTranscriptionEndpoint(
+  cfg: Pick<OpenAiEngineConfig, 'endpoint' | 'apiKey' | 'model' | 'fetchImpl'>
+): Promise<{ ok: boolean; error?: string }> {
+  const doFetch = cfg.fetchImpl ?? fetch;
+  if (!cfg.endpoint.trim()) {
+    return { ok: false, error: 'Set the transcription endpoint URL in Settings first.' };
+  }
+  const url = normalizeTranscriptionEndpoint(cfg.endpoint);
+  const form = new FormData();
+  form.set('file', new Blob([new Uint8Array(buildSilentWav(1))], { type: 'audio/wav' }), 'test.wav');
+  form.set('model', cfg.model || 'whisper-1');
+  const headers: Record<string, string> = {};
+  if (cfg.apiKey) headers['Authorization'] = `Bearer ${cfg.apiKey}`;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30_000);
+    let res: Response;
+    try {
+      res = await doFetch(url, { method: 'POST', headers, body: form, signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) {
+      const body = (await res.text()).slice(0, 300);
+      return { ok: false, error: `The transcription endpoint returned ${res.status}: ${body}` };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: `Could not reach the transcription endpoint (${url}): ${err instanceof Error ? err.message : String(err)}` };
+  }
 }
 
 // ---------------------------------------------------------------------------

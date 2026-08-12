@@ -176,6 +176,17 @@ export async function syncShareCaptions(id: string): Promise<void> {
   }
 }
 
+/**
+ * Delete a remote copy without touching local state.
+ *
+ * The orphan retry queue needs this: by the time it runs, the local recording
+ * (and its share block) is already gone, so there is no metadata left to read
+ * the provider from. The caller holds the provider and the id instead.
+ */
+export async function removeRemoteShare(id: string, provider: 'server' | 's3'): Promise<void> {
+  await currentProvider(provider).remove(id);
+}
+
 /** Delete the remote copy and clear the local share block. */
 export async function unshareVideo(id: string): Promise<void> {
   const meta = library().get(id);

@@ -5,7 +5,7 @@ export default defineConfig({
   timeout: 120_000,
   retries: 0,
   workers: 1,
-  reporter: [['list']],
+  reporter: [['list'], ['./e2e/skip-reporter.ts']],
   use: {
     trace: 'retain-on-failure',
   },

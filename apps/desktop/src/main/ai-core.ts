@@ -114,7 +114,25 @@ async function readError(res: Response): Promise<string> {
   return `${res.status}: ${body}`;
 }
 
-export async function complete(cfg: AiProviderConfig, prompt: string): Promise<string> {
+/**
+ * Output budget for the generation request. Current Anthropic models spend
+ * part of this on internal reasoning (the old 2000 cap produced JSON cut off
+ * mid-object with nothing telling the user why), so give the structured
+ * response real headroom.
+ */
+export const MAX_COMPLETION_TOKENS = 8192;
+
+export interface CompletionResult {
+  text: string;
+  /** True when the provider stopped at its token limit, so the text may be cut off. */
+  truncated: boolean;
+}
+
+export async function complete(
+  cfg: AiProviderConfig,
+  prompt: string,
+  signal?: AbortSignal
+): Promise<CompletionResult> {
   const doFetch = cfg.fetchImpl ?? fetch;
   if (!cfg.model.trim()) {
     throw new Error('Set a model name in Settings first.');
@@ -122,6 +140,9 @@ export async function complete(cfg: AiProviderConfig, prompt: string): Promise<s
 
   if (cfg.provider === 'anthropic') {
     if (!cfg.apiKey) throw new Error('Add your Anthropic API key in Settings first.');
+    // No `thinking` parameter on purpose: omitting it is the one setting valid
+    // across every current Anthropic model (an explicit disable is rejected by
+    // some of them).
     const res = await doFetch(anthropicUrl(cfg.endpoint), {
       method: 'POST',
       headers: {
@@ -131,18 +152,22 @@ export async function complete(cfg: AiProviderConfig, prompt: string): Promise<s
       },
       body: JSON.stringify({
         model: cfg.model,
-        max_tokens: 2000,
+        max_tokens: MAX_COMPLETION_TOKENS,
         messages: [{ role: 'user', content: prompt }],
       }),
+      signal,
     });
     if (!res.ok) throw new Error(`Anthropic returned ${await readError(res)}`);
-    const data = (await res.json()) as { content?: { type?: string; text?: string }[] };
+    const data = (await res.json()) as {
+      stop_reason?: string;
+      content?: { type?: string; text?: string }[];
+    };
     const text = (data.content ?? [])
       .filter((b) => b.type === 'text')
       .map((b) => b.text ?? '')
       .join('');
     if (!text.trim()) throw new Error('Anthropic returned an empty response.');
-    return text;
+    return { text, truncated: data.stop_reason === 'max_tokens' };
   }
 
   if (cfg.provider === 'openai') {
@@ -153,15 +178,19 @@ export async function complete(cfg: AiProviderConfig, prompt: string): Promise<s
       headers,
       body: JSON.stringify({
         model: cfg.model,
+        max_tokens: MAX_COMPLETION_TOKENS,
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.4,
       }),
+      signal,
     });
     if (!res.ok) throw new Error(`The API returned ${await readError(res)}`);
-    const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+    const data = (await res.json()) as {
+      choices?: { message?: { content?: string }; finish_reason?: string }[];
+    };
     const text = data.choices?.[0]?.message?.content ?? '';
     if (!text.trim()) throw new Error('The API returned an empty response.');
-    return text;
+    return { text, truncated: data.choices?.[0]?.finish_reason === 'length' };
   }
 
   // Ollama
@@ -173,12 +202,13 @@ export async function complete(cfg: AiProviderConfig, prompt: string): Promise<s
       messages: [{ role: 'user', content: prompt }],
       stream: false,
     }),
+    signal,
   });
   if (!res.ok) throw new Error(`Ollama returned ${await readError(res)}`);
-  const data = (await res.json()) as { message?: { content?: string } };
+  const data = (await res.json()) as { message?: { content?: string }; done_reason?: string };
   const text = data.message?.content ?? '';
   if (!text.trim()) throw new Error('Ollama returned an empty response.');
-  return text;
+  return { text, truncated: data.done_reason === 'length' };
 }
 
 // ---------------------------------------------------------------------------
@@ -269,18 +299,30 @@ export async function generate(
   cfg: AiProviderConfig,
   meta: VideoMeta,
   segments: TranscriptSegment[],
-  kinds: AiKind[]
+  kinds: AiKind[],
+  signal?: AbortSignal
 ): Promise<AiGenerationResult> {
   if (kinds.length === 0) return {};
   const prompt = buildPrompt(meta, segments, kinds);
-  const text = await complete(cfg, prompt);
-  return parseGeneration(text, kinds, meta.durationSec);
+  const completion = await complete(cfg, prompt, signal);
+  try {
+    return parseGeneration(completion.text, kinds, meta.durationSec);
+  } catch (err) {
+    // A response cut off at the token limit reads like broken JSON; name the
+    // real cause instead of blaming the model's output.
+    if (completion.truncated) {
+      throw new Error(
+        'The model ran out of room before finishing its answer, so the results were cut off. Try again, or switch to a model with a larger output limit.'
+      );
+    }
+    throw err;
+  }
 }
 
 /** Tiny request used by Settings "Test connection". */
 export async function testConnection(cfg: AiProviderConfig): Promise<{ ok: boolean; error?: string }> {
   try {
-    const text = await complete(cfg, 'Reply with the single word: ok');
+    const { text } = await complete(cfg, 'Reply with the single word: ok');
     if (!text.trim()) return { ok: false, error: 'The model returned an empty response.' };
     return { ok: true };
   } catch (err) {

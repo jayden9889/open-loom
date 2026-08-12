@@ -98,11 +98,20 @@ export interface VideoMeta {
   share?: {
     provider: 'server' | 's3';
     url: string;
+    /**
+     * Server-assigned video id. The server mints a DIFFERENT id when the
+     * requested one is already taken, so every remote call (delete, patch,
+     * activity, comment moderation) must address this id, never the local one
+     * (documented additive extension, see docs/DECISIONS.md).
+     */
+    remoteId?: string;
     uploadedAt?: string;
     privacy: 'link' | 'password';
     allowComments: boolean;
     allowReactions: boolean;
     allowDownload: boolean;
+    /** Server mode: ask viewers for their name before playing (viewer insights). */
+    requireName?: boolean;
     cta?: { label: string; url: string };
     /**
      * Write-only transport field for updateShareSettings: a non-empty string
@@ -124,15 +133,67 @@ export interface VideoMeta {
    * view show the one-click "Set to Unlisted" flip button.
    */
   youtubePrivacy?: 'unlisted' | 'private';
+  /**
+   * In-flight resumable upload session, persisted the moment the session opens
+   * so a quit or crash mid-upload can be recovered on the next launch (Google
+   * keeps the session for 7 days). Cleared on success and on cancel; kept on
+   * failure so a retry resumes instead of starting from byte zero.
+   */
+  youtubeUpload?: { sessionUri: string; total: number; startedAt: string };
   transcript?: { language: string; engine: string };
+  /**
+   * Why the last automatic transcription failed, in plain English. Written by
+   * the auto-transcribe hook so a silent background failure is visible in the
+   * Transcript tab; cleared on the next successful transcription.
+   */
+  transcriptError?: string;
   ai?: {
     title?: string;
     summary?: string;
     chapters?: { t: number; title: string }[];
     tasks?: string[];
+    /**
+     * Set when the user hand-edited any AI result (summary text, action
+     * items, chapter names, manual chapters). Regeneration then refuses to
+     * overwrite existing values unless explicitly forced.
+     */
+    edited?: boolean;
+    /**
+     * Set after a trim: the stored results describe footage that no longer
+     * exists. Cleared by the next successful generation.
+     */
+    stale?: boolean;
+    /** Why the last automatic AI generation failed; cleared on success. */
+    error?: string;
   };
   customThumb?: boolean;
-  edits?: { trimmedFrom?: string };
+  edits?: {
+    trimmedFrom?: string;
+    /**
+     * Size and duration of the banked original, captured on the FIRST edit so
+     * later edits do not overwrite them with already-edited values. Lets the
+     * keep/revert surfaces say what reverting restores and how much disk the
+     * duplicate costs, without walking the directory.
+     */
+    originalDurationSec?: number;
+    originalSizeBytes?: number;
+    /**
+     * Every edit applied since the original was banked, so "Revert" can say
+     * how many it undoes rather than calling it "this edit".
+     */
+    history?: { kind: 'trim' | 'stitch'; at: string }[];
+  };
+  /**
+   * A continuation take filmed via "End here and film a continuation", waiting
+   * to be appended to this video. Cleared once it is stitched on, or when the
+   * user chooses to keep the take as a separate recording.
+   */
+  continuation?: { takeId: string; recordedAt: string };
+  /**
+   * Runtime-only flag set by list() when video.mp4 is gone from disk (deleted
+   * or moved outside the app). Never persisted to meta.json.
+   */
+  missing?: boolean;
 }
 
 export interface Folder {
@@ -187,6 +248,19 @@ export const LEGACY_DRAW_SHORTCUT = 'CommandOrControl+Shift+D';
 export type TranscriptionEngine = 'whisper' | 'openai' | 'off';
 export type AiProvider = 'anthropic' | 'openai' | 'ollama' | 'off';
 export type ShareProviderKind = 'server' | 's3' | 'none';
+
+/**
+ * Curated model suggestions per AI provider so nobody has to type a model ID
+ * blind (Settings renders these in a picker with a custom escape hatch).
+ * Anthropic IDs verified against the current model catalogue, 2026-08; the
+ * openai/ollama entries are suggestions for whatever compatible endpoint is
+ * configured.
+ */
+export const AI_MODEL_SUGGESTIONS: Record<Exclude<AiProvider, 'off'>, { default: string; models: string[] }> = {
+  anthropic: { default: 'claude-opus-5', models: ['claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5'] },
+  openai: { default: 'gpt-4o-mini', models: ['gpt-4o-mini', 'gpt-4o'] },
+  ollama: { default: 'llama3.1', models: ['llama3.1', 'qwen2.5', 'mistral'] },
+};
 
 // ---------------------------------------------------------------------------
 // Camera effects (Settings > FaceCam)
@@ -302,6 +376,13 @@ export interface Settings {
     refreshToken: string;
     /** Title of the connected account's YouTube channel, resolved at connect time. Display only; '' = unknown. */
     channelTitle: string;
+    /**
+     * Generation of YT_SCOPE the stored refresh token was consented under
+     * (youtube-core's YT_SCOPE_VERSION at connect time). 0 = a token minted
+     * before the scope widened to allow removing videos; Settings › YouTube
+     * shows a "Reconnect to enable removing videos" prompt for those.
+     */
+    scopeVersion: number;
   };
 }
 
@@ -332,16 +413,45 @@ export interface ShareResult {
 export type UploadProgress = (info: { file: string; pct: number; note?: string }) => void;
 
 /**
+ * Result of a provider connection test. `warning` is a non-fatal caveat shown
+ * alongside success (e.g. an http:// server URL sending the API key in clear).
+ */
+export interface ShareProviderTestResult {
+  ok: boolean;
+  error?: string;
+  warning?: string;
+}
+
+/**
  * Provider adapter every sharing backend implements (server, s3, none).
  * `prepareShare` must be fast: it mints the share URL that is copied to the
  * clipboard the moment recording stops; `upload` then runs in the background.
+ * `signal` aborts an in-flight upload (the Cancel button / quit guard).
  */
 export interface ShareProvider {
   readonly kind: ShareProviderKind;
   prepareShare(meta: VideoMeta): Promise<ShareResult>;
-  upload(plan: UploadPlan, filesDir: string, onProgress: UploadProgress): Promise<void>;
+  upload(plan: UploadPlan, filesDir: string, onProgress: UploadProgress, signal?: AbortSignal): Promise<void>;
   remove(videoId: string): Promise<void>;
-  test(cfg: unknown): Promise<{ ok: boolean; error?: string }>;
+  test(cfg: unknown): Promise<ShareProviderTestResult>;
+}
+
+/**
+ * A remote share copy the user chose to leave behind when its delete failed
+ * (server unreachable, expired key). Persisted in `pending-unshare.json` in
+ * the library root and retried on launch and on the next successful provider
+ * contact, so a public link is never silently stranded live forever.
+ */
+export interface PendingUnshare {
+  /** Local video id at the time of deletion (the local copy may be gone). */
+  videoId: string;
+  provider: 'server' | 's3';
+  url: string;
+  /** Server-assigned remote id (server provider) or the object key id (s3). */
+  remoteId: string;
+  recordedAt: string;
+  /** Plain-English reason the last removal attempt failed. */
+  lastError?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -397,7 +507,17 @@ export interface TranscriptResult {
 
 export interface TranscriptionProvider {
   readonly engine: TranscriptionEngine;
-  transcribe(audioPath: string, language: string, onProgress: (pct: number) => void): Promise<TranscriptResult>;
+  /**
+   * `onProgress` may carry an honest phase note ("Uploading audio") alongside
+   * the percentage; `signal` aborts the engine (kills the whisper-cli child or
+   * the in-flight request) for cancel and timeout support.
+   */
+  transcribe(
+    audioPath: string,
+    language: string,
+    onProgress: (pct: number, note?: string) => void,
+    signal?: AbortSignal
+  ): Promise<TranscriptResult>;
 }
 
 // ---------------------------------------------------------------------------
@@ -410,8 +530,36 @@ export interface PermissionsSnapshot {
   screen: PermissionStatus;
   camera: PermissionStatus;
   mic: PermissionStatus;
+  /**
+   * macOS Accessibility grant (isTrustedAccessibilityClient). Click highlights
+   * need it: without it the input hook starts fine and simply never delivers a
+   * click, so this snapshot is the only place the truth is visible.
+   */
+  accessibility: PermissionStatus;
   ffmpeg: boolean;
   whisper: boolean;
+  /**
+   * One plain sentence when the save folder is unusable right now (drive
+   * unplugged, folder gone, not writable), null when it is fine. Rides on the
+   * permissions snapshot because that is the health check the app already
+   * re-runs at boot, on focus and from every Re-check button.
+   */
+  saveDirProblem: string | null;
+}
+
+/**
+ * Where the last update check landed (About pane). 'unavailable' means checks
+ * cannot work on this install at all (and `detail` says why); 'failed' means
+ * this check did not complete; 'available'/'downloaded' carry the new version.
+ */
+export interface UpdateStatus {
+  state: 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloaded' | 'failed' | 'unavailable';
+  /** One plain sentence for the About pane. */
+  detail: string;
+  /** ISO time of the last completed check, null before the first one. */
+  checkedAt: string | null;
+  /** New version, when one is known. */
+  version?: string;
 }
 
 export interface JobProgress {
@@ -421,6 +569,12 @@ export interface JobProgress {
   /** 0..100. */
   pct: number;
   note?: string;
+  /**
+   * True on a terminal event that is NOT a success (upload failed or was
+   * cancelled). Consumers that treat `pct >= 100` as "done" must treat this as
+   * "over" too - a failure used to report pct 100, which read as completed.
+   */
+  failed?: boolean;
 }
 
 export interface CaptureSource {
@@ -491,7 +645,13 @@ export interface OpenLoomAPI {
   listVideos(): Promise<VideoMeta[]>;
   getVideo(id: string): Promise<VideoMeta>;
   updateVideo(id: string, patch: Partial<VideoMeta>): Promise<VideoMeta>;
-  deleteVideo(id: string): Promise<void>;
+  /**
+   * `force` deletes locally even when the shared copy cannot be removed (the
+   * orphaned link is tombstoned and retried on later launches). Without it a
+   * failed unshare fails the whole delete, so the public link never silently
+   * outlives the UI that could revoke it.
+   */
+  deleteVideo(id: string, opts?: { force?: boolean }): Promise<void>;
   duplicateVideo(id: string): Promise<VideoMeta>;
   revealVideo(id: string): void;
   fileUrl(id: string, file: string): string;
@@ -502,6 +662,7 @@ export interface OpenLoomAPI {
   moveVideo(id: string, folderId: string | null): Promise<void>;
   searchVideos(q: string): Promise<SearchMatch[]>;
   setCustomThumbnail(id: string, source: { path?: string; atSec?: number }): Promise<void>;
+  /** Rebuild thumb/gif/waveform for a recording whose preview generation failed. */
 
   // editor
   trimVideo(id: string, ranges: { start: number; end: number }[]): Promise<void>;
@@ -512,36 +673,60 @@ export interface OpenLoomAPI {
 
   // transcribe + AI
   transcribeVideo(id: string): Promise<void>;
-  generateAI(id: string, kinds: string[]): Promise<void>;
+  /** Abort this video's in-flight transcription; the pending transcribeVideo call rejects (additive; see docs/DECISIONS.md). */
+  /**
+   * `force` overwrites hand-edited results (the Regenerate path, behind a
+   * confirm). Without it, generation refuses to replace edited values
+   * (additive; see docs/DECISIONS.md).
+   */
+  generateAI(id: string, kinds: string[], force?: boolean): Promise<void>;
+  /** Abort this video's in-flight AI generation; the pending generateAI call rejects (additive; see docs/DECISIONS.md). */
   /** Verify the saved AI provider settings with a tiny real request (additive; see docs/DECISIONS.md). */
   testAI(): Promise<{ ok: boolean; error?: string }>;
+  /** Verify the saved transcription engine settings (a tiny silent-audio request for the API engine) (additive; see docs/DECISIONS.md). */
 
   // share
   shareVideo(id: string): Promise<{ url: string }>;
   unshareVideo(id: string): Promise<void>;
   updateShareSettings(id: string, patch: Partial<VideoMeta['share']>): Promise<void>;
   getShareActivity(id: string): Promise<ShareActivity>;
-  testShareProvider(cfg: unknown): Promise<{ ok: boolean; error?: string }>;
+  testShareProvider(cfg: unknown): Promise<ShareProviderTestResult>;
   /** Delete a viewer comment on the share server via the creator key (additive; see docs/DECISIONS.md). */
   deleteShareComment(videoId: string, commentId: string): Promise<void>;
+  /** Abort this video's in-flight share upload (additive; see docs/DECISIONS.md). */
+  /** Remote share copies whose delete failed and the user chose to leave behind (additive; see docs/DECISIONS.md). */
+  /** Retry removing every pending remote copy now; resolves with what is still stranded. */
 
   // publish to YouTube (Data API upload, unlisted; additive to SPEC section 5, see docs/DECISIONS.md)
-  /** Whether a YouTube account is connected (a refresh token is stored). `channel` is the connected channel's title ('' = unknown). */
-  youtubeStatus(): Promise<{ connected: boolean; channel: string }>;
+  /**
+   * Whether a YouTube account is connected (a refresh token is stored). `channel` is the
+   * connected channel's title ('' = unknown). `needsReconnect` is true when the stored
+   * token predates the current scope set, so removing videos needs a fresh consent.
+   */
+  youtubeStatus(): Promise<{ connected: boolean; channel: string; needsReconnect: boolean }>;
   /**
    * Run the Google OAuth loopback consent and store the refresh token. Resolves the
    * account's channel and rejects if the account has none (nothing is stored then),
    * so a wrong-account connect fails loudly here instead of at first publish.
+   * `channelLookupFailed` is true when the connect stored a token but could not
+   * confirm which channel it reaches (network or API hiccup) - worth a warning.
    */
-  youtubeConnect(): Promise<{ connected: boolean; channel: string }>;
-  /** Forget the stored YouTube tokens (does not revoke server-side). */
-  youtubeDisconnect(): Promise<{ connected: boolean }>;
+  youtubeConnect(): Promise<{ connected: boolean; channel: string; channelLookupFailed?: boolean }>;
+  /**
+   * Forget the stored YouTube tokens, revoking them at Google first. `revoked` says
+   * whether the Google-side revoke succeeded; local state is cleared either way.
+   */
+  youtubeDisconnect(): Promise<{ connected: boolean; revoked: boolean }>;
   /**
    * Upload the video's final MP4 via videos.insert requesting unlisted, persist the
    * watch link and return it. `privacy` is what YouTube actually applied: 'private'
    * while the API project is unaudited (caller shows the flip-to-unlisted step).
    */
   youtubePublish(videoId: string): Promise<{ url: string; videoId: string; privacy: 'unlisted' | 'private' }>;
+  /** Abort this recording's in-flight upload. The pending youtubePublish call then rejects with 'Upload cancelled.'. */
+  youtubeCancelPublish(videoId: string): Promise<void>;
+  /** Delete this recording's upload from the user's channel (videos.delete) and clear the stored link. */
+  youtubeUnpublish(videoId: string): Promise<void>;
   /** Open the studio.youtube.com edit page for this recording's upload so the user can flip it to Unlisted. */
   youtubeOpenStudioEdit(videoId: string): void;
 
@@ -565,6 +750,8 @@ export interface OpenLoomAPI {
   /** Open the system Video Effects panel (the Control Center camera controls). */
   openCameraEffects(): void;
   installWhisper(): Promise<void>;
+  /** Stop a running whisper.cpp install (kills the build; partial files are reused by the next run) (additive; see docs/DECISIONS.md). */
+  /** Whether an install is running plus its buffered log, so reopening Settings reflects reality (additive; see docs/DECISIONS.md). */
   onSetupLog(cb: (line: string) => void): () => void;
   fetchFfmpeg(): Promise<void>;
   copyToClipboard(text: string): void;
@@ -601,7 +788,7 @@ export interface OpenLoomInternal {
   getSettings(): Promise<Settings>;
   setBubbleMirror(mirror: boolean): void;
   onSettingsChanged(cb: (s: Settings) => void): () => void;
-  onNavigate(cb: (nav: { view: string; mode?: string }) => void): () => void;
+  onNavigate(cb: (nav: { view: string; mode?: string; id?: string }) => void): () => void;
   /** Toasts pushed from the main process (e.g. the share-on-stop flow). */
   onToast(cb: (t: { kind: 'info' | 'success' | 'error'; text: string }) => void): () => void;
   // engine window

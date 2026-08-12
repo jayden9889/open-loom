@@ -104,8 +104,8 @@ export function videosRoutes(ctx: AppCtx): Hono {
     ctx.db
       .prepare(
         `INSERT INTO videos (id, title, description, creator, created_at, duration_sec, width, height,
-           size_bytes, status, privacy, password_hash, allow_comments, allow_reactions, allow_download, chapters_json, files_dir)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'processing', ?, ?, ?, ?, ?, ?, ?)`
+           size_bytes, status, privacy, password_hash, allow_comments, allow_reactions, allow_download, require_name, chapters_json, files_dir)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'processing', ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
@@ -122,6 +122,7 @@ export function videosRoutes(ctx: AppCtx): Hono {
         asBoolInt(body.allowComments, 1),
         asBoolInt(body.allowReactions, 1),
         asBoolInt(body.allowDownload, 1),
+        asBoolInt(body.requireName, 0),
         sanitizeChapters(body.chapters) ? JSON.stringify(sanitizeChapters(body.chapters)) : null,
         dir
       );
@@ -168,6 +169,7 @@ export function videosRoutes(ctx: AppCtx): Hono {
     if (typeof body.allowComments === 'boolean') set('allow_comments', body.allowComments ? 1 : 0);
     if (typeof body.allowReactions === 'boolean') set('allow_reactions', body.allowReactions ? 1 : 0);
     if (typeof body.allowDownload === 'boolean') set('allow_download', body.allowDownload ? 1 : 0);
+    if (typeof body.requireName === 'boolean') set('require_name', body.requireName ? 1 : 0);
 
     if ('cta' in body) {
       const cta = body.cta as { label?: unknown; url?: unknown } | null;
@@ -268,6 +270,7 @@ export function publicVideoJson(ctx: AppCtx, video: VideoRow): Record<string, un
     allowComments: video.allow_comments === 1,
     allowReactions: video.allow_reactions === 1,
     allowDownload: video.allow_download === 1,
+    requireName: video.require_name === 1,
     cta: video.cta_label && video.cta_url ? { label: video.cta_label, url: video.cta_url } : null,
     chapters: video.chapters_json ? (JSON.parse(video.chapters_json) as unknown) : null,
     shareUrl: `${ctx.cfg.baseUrl}/v/${video.id}`,

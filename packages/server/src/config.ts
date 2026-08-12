@@ -24,6 +24,13 @@ export interface ServerConfig {
    * (including the password brute-force lockout).
    */
   trustProxy: boolean;
+  /**
+   * Origins allowed to iframe watch pages (EMBED_ORIGINS, space or comma
+   * separated). Unset = 'self' only; '*' = any site may embed. The password
+   * page and /unlock always refuse framing regardless - a credential prompt
+   * inside someone else's iframe is a clickjacking target, never a feature.
+   */
+  embedOrigins: string[];
 }
 
 function boolEnv(value: string | undefined, fallback: boolean): boolean {
@@ -67,6 +74,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const maxUploadBytes = intEnv(env.MAX_UPLOAD_MB, 2048) * 1024 * 1024;
   const creatorName = (env.CREATOR_NAME || '').trim();
   const trustProxy = boolEnv(env.TRUST_PROXY, false);
+  const embedOrigins = (env.EMBED_ORIGINS || '')
+    .split(/[\s,]+/)
+    .map((o) => o.trim())
+    .filter(Boolean);
 
-  return { port, dataDir, apiKey, apiKeyGenerated, baseUrl, maxUploadBytes, creatorName, trustProxy };
+  return { port, dataDir, apiKey, apiKeyGenerated, baseUrl, maxUploadBytes, creatorName, trustProxy, embedOrigins };
 }

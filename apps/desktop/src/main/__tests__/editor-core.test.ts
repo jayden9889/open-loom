@@ -162,7 +162,9 @@ describe('stitchVideoFiles', () => {
   it('re-encodes mismatched clips (resolution/fps/audio-less) into one seekable file', async () => {
     const out = path.join(work, 'stitch-reencode.mp4');
     const result = await stitchVideoFiles(bins, sampleA, sampleOdd, out);
-    expect(result.method).toBe('reencode');
+    // Mismatched clips now re-encode only the APPENDED clip, leaving the main
+    // video's stream untouched, so the method is 'append-reencode'.
+    expect(result.method).toBe('append-reencode');
     const info = await probe(bins, out);
     expect(info.durationSec).toBeGreaterThan(8.4);
     expect(info.durationSec).toBeLessThan(9.6);

@@ -13,6 +13,27 @@ export interface LibraryDeps {
   trash(absPath: string): Promise<void>;
   newId(): string;
   warn?(msg: string): void;
+  /** Surface a user-visible recovery message (a toast in the app, silent in tests). */
+  notify?(msg: string): void;
+}
+
+/**
+ * Atomic write: write to a temp file in the same directory, fsync, then rename
+ * over the target. Rename within a filesystem is atomic, so a crash or power
+ * cut mid-write can no longer truncate the live file - a bare writeFileSync
+ * here could silently erase a recording's meta.json or every folder in
+ * library.json.
+ */
+export function writeFileAtomic(target: string, data: string): void {
+  const tmp = `${target}.${process.pid}.tmp`;
+  const fd = fs.openSync(tmp, 'w');
+  try {
+    fs.writeFileSync(fd, data);
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  fs.renameSync(tmp, target);
 }
 
 const ID_RE = /^[A-Za-z0-9_-]{1,32}$/;
@@ -85,8 +106,12 @@ export class LibraryStore {
   }
 
   private writeMeta(meta: VideoMeta): void {
+    // `missing` is computed at list() time from the disk state; persisting it
+    // would fossilise a stale answer in meta.json.
+    const persisted = { ...meta };
+    delete persisted.missing;
     fs.mkdirSync(this.videoDir(meta.id), { recursive: true });
-    fs.writeFileSync(this.metaPath(meta.id), JSON.stringify(meta, null, 2));
+    writeFileAtomic(this.metaPath(meta.id), JSON.stringify(persisted, null, 2));
   }
 
   // -- index (folders) ------------------------------------------------------
@@ -96,18 +121,37 @@ export class LibraryStore {
   }
 
   readIndex(): LibraryIndex {
+    let raw: string;
     try {
-      const raw = fs.readFileSync(this.indexPath(), 'utf8');
+      raw = fs.readFileSync(this.indexPath(), 'utf8');
+    } catch {
+      // Missing is the normal first-run state.
+      return { folders: [], order: [] };
+    }
+    try {
       const idx = JSON.parse(raw) as LibraryIndex;
       return { folders: idx.folders ?? [], order: idx.order ?? [] };
     } catch {
+      // Corrupt is NOT the same as missing: presenting it as "no folders" and
+      // letting the next writeIndex overwrite the file would make the loss
+      // permanent and silent. Move it aside so it can be recovered, and say so.
+      const backup = path.join(this.dir, `library.corrupt-${Date.now()}.json`);
+      try {
+        fs.renameSync(this.indexPath(), backup);
+      } catch {
+        /* the read still returns empty below */
+      }
+      this.deps.warn?.(`library.json was unreadable; moved it to ${path.basename(backup)}`);
+      this.deps.notify?.(
+        'The folder list could not be read, so folders have been reset. The unreadable file was kept in the save folder as a backup.'
+      );
       return { folders: [], order: [] };
     }
   }
 
   private writeIndex(idx: LibraryIndex): void {
     this.ensureRoot();
-    fs.writeFileSync(this.indexPath(), JSON.stringify(idx, null, 2));
+    writeFileAtomic(this.indexPath(), JSON.stringify(idx, null, 2));
   }
 
   // -- videos ---------------------------------------------------------------
@@ -119,14 +163,26 @@ export class LibraryStore {
       if (!entry.isDirectory() || !ID_RE.test(entry.name)) continue;
       const meta = this.readMeta(entry.name);
       if (meta) {
+        // A recording deleted or moved outside the app used to stay in the
+        // grid as a healthy-looking dead card; flag it so the UI can be honest.
+        if (!fs.existsSync(path.join(this.dir, entry.name, 'video.mp4'))) meta.missing = true;
         out.push(meta);
       } else if (fs.existsSync(this.metaPath(entry.name))) {
         this.deps.warn?.(`skipping corrupt meta.json in ${entry.name}`);
+        if (!this.corruptNotified.has(entry.name)) {
+          this.corruptNotified.add(entry.name);
+          this.deps.notify?.(
+            `A recording in the save folder could not be read (${entry.name}). Its files are still there; the entry is hidden until its meta.json is repaired.`
+          );
+        }
       }
     }
     out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
     return out;
   }
+
+  /** Corrupt meta.json dirs already toasted this session, so list() does not re-toast per refresh. */
+  private readonly corruptNotified = new Set<string>();
 
   get(id: string): VideoMeta {
     const meta = this.readMeta(id);
@@ -151,6 +207,7 @@ export class LibraryStore {
   async delete(id: string): Promise<void> {
     this.get(id);
     await this.deps.trash(this.videoDir(id));
+    this.transcriptCache.delete(id);
     const idx = this.readIndex();
     idx.order = idx.order.filter((v) => v !== id);
     this.writeIndex(idx);
@@ -161,18 +218,35 @@ export class LibraryStore {
     const newId = this.deps.newId();
     const from = this.videoDir(id);
     const to = this.videoDir(newId);
-    // Async copy: a large recording can be hundreds of MB to GB; a synchronous
-    // fs.cpSync here blocks the Electron main-process event loop and freezes
-    // every window for the whole copy.
-    await fs.promises.cp(from, to, { recursive: true });
     const copy: VideoMeta = {
       ...source,
       id: newId,
       title: `${source.title} copy`,
       createdAt: new Date().toISOString(),
     };
+    // Per-publication state must not carry over: the copy is not shared and not
+    // on YouTube. Keeping youtubeUrl made "Copy YouTube link" on the duplicate
+    // hand out a link to a different video.
     delete copy.share;
-    this.writeMeta(copy);
+    delete copy.youtubeUrl;
+    delete copy.youtubePrivacy;
+    // Stage into a dot-prefixed temp dir, invisible to list() (which only
+    // accepts ID_RE names), and rename into place only once the copy and its
+    // corrected meta.json are complete. A failure part-way (disk full,
+    // permissions) used to leave a partial multi-GB directory on disk forever,
+    // holding the SOURCE's meta.json and invisible to every screen in the app.
+    const staging = path.join(this.dir, `.tmp-${newId}`);
+    try {
+      // Async copy: a large recording can be hundreds of MB to GB; a synchronous
+      // fs.cpSync here blocks the Electron main-process event loop and freezes
+      // every window for the whole copy.
+      await fs.promises.cp(from, staging, { recursive: true });
+      writeFileAtomic(path.join(staging, 'meta.json'), JSON.stringify(copy, null, 2));
+      fs.renameSync(staging, to);
+    } catch (err) {
+      fs.rmSync(staging, { recursive: true, force: true });
+      throw err;
+    }
     return copy;
   }
 
@@ -221,34 +295,62 @@ export class LibraryStore {
 
   // -- search ----------------------------------------------------------------
 
+  /** In-memory transcript index, invalidated per video by mtime + size. */
+  private readonly transcriptCache = new Map<string, { stamp: string; texts: string[] }>();
+
   /**
-   * Title search now; transcript.json (segments) is searched when present so
-   * transcript search lights up as soon as the transcription module lands.
+   * Transcript segment texts for one video, served from RAM once read. The old
+   * per-query readFileSync of every transcript was a synchronous full-library
+   * disk scan on the main-process event loop, per keystroke - at 100+
+   * recordings it stuttered the whole app, including a recording in flight.
    */
-  search(q: string): SearchMatch[] {
+  private async transcriptTexts(id: string): Promise<string[]> {
+    const transcriptPath = path.join(this.videoDir(id), 'transcript.json');
+    let stat: fs.Stats;
+    try {
+      stat = await fs.promises.stat(transcriptPath);
+    } catch {
+      this.transcriptCache.delete(id);
+      return [];
+    }
+    const stamp = `${stat.mtimeMs}:${stat.size}`;
+    const hit = this.transcriptCache.get(id);
+    if (hit && hit.stamp === stamp) return hit.texts;
+    try {
+      const transcript = JSON.parse(await fs.promises.readFile(transcriptPath, 'utf8')) as {
+        segments?: { text?: string }[];
+      };
+      const texts = (transcript.segments ?? []).map((seg) => (seg.text ?? '').trim()).filter(Boolean);
+      this.transcriptCache.set(id, { stamp, texts });
+      return texts;
+    } catch {
+      this.deps.warn?.(`unreadable transcript.json for ${id}`);
+      this.transcriptCache.delete(id);
+      return [];
+    }
+  }
+
+  /**
+   * Searches titles, descriptions, AI titles/summaries, chapter titles and
+   * transcript segments. Async so the transcript reads yield to the event loop.
+   */
+  async search(q: string): Promise<SearchMatch[]> {
     const needle = q.trim().toLowerCase();
     if (!needle) return [];
     const results: SearchMatch[] = [];
     for (const meta of this.list()) {
       const matches: string[] = [];
-      if (meta.title.toLowerCase().includes(needle)) matches.push(meta.title);
-      if ((meta.ai?.title ?? '').toLowerCase().includes(needle)) matches.push(meta.ai!.title!);
-      const transcriptPath = path.join(this.videoDir(meta.id), 'transcript.json');
-      if (fs.existsSync(transcriptPath)) {
-        try {
-          const transcript = JSON.parse(fs.readFileSync(transcriptPath, 'utf8')) as {
-            segments?: { text?: string }[];
-          };
-          for (const seg of transcript.segments ?? []) {
-            const text = seg.text ?? '';
-            if (text.toLowerCase().includes(needle)) {
-              matches.push(text.trim());
-              if (matches.length >= 6) break;
-            }
-          }
-        } catch {
-          this.deps.warn?.(`unreadable transcript.json for ${meta.id}`);
-        }
+      const consider = (text: string | undefined) => {
+        if (text && text.toLowerCase().includes(needle)) matches.push(text);
+      };
+      consider(meta.title);
+      consider(meta.ai?.title);
+      consider(meta.description);
+      consider(meta.ai?.summary);
+      for (const chapter of meta.ai?.chapters ?? []) consider(chapter.title);
+      for (const text of await this.transcriptTexts(meta.id)) {
+        if (matches.length >= 6) break;
+        if (text.toLowerCase().includes(needle)) matches.push(text);
       }
       if (matches.length > 0) results.push({ id: meta.id, matches });
     }

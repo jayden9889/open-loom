@@ -5,7 +5,7 @@
  * buffers over IPC into a crash-safe temp file, and post-processes the
  * result into the library on stop.
  */
-import { app, clipboard, ipcMain, type Display } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Notification, type Display } from 'electron';
 import { nanoid } from 'nanoid';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -22,13 +22,16 @@ import { getSettings } from './settings';
 import { log } from './logger';
 import {
   broadcast,
+  createMainWindow,
   destroyBubble,
   destroyCountdown,
   destroyDrawOverlay,
+  destroyEngineWindow,
   destroyHud,
   destroyLauncher,
   destroySwitcher,
   displayForSource,
+  getMainWindow,
   fadeBubbleToLayout,
   getBubbleWindow,
   getDrawWindow,
@@ -50,6 +53,13 @@ import {
   showSwitcher,
 } from './windows';
 import { setPendingCapture, clearPendingCapture, displayIdForSource } from './capture';
+import {
+  chunkWatchdogTripped,
+  freeSpaceVerdict,
+  keepChunksOnCancel,
+  startBlockMessage,
+  stopIntent,
+} from './recording-guards';
 import * as ffmpeg from './ffmpeg';
 import { shareVideo } from './share';
 import { library } from './library';
@@ -77,6 +87,12 @@ interface ActiveRecording {
   micOn: boolean;
   drawOn: boolean;
   cancelled: boolean;
+  /** Last time an engine:chunk landed; feeds the dead-engine watchdog. */
+  lastChunkAt: number;
+  /** One low-disk warning per session, not one per tick. */
+  lowDiskWarned: boolean;
+  /** One camera-loss warning per session. */
+  cameraLostNotified: boolean;
   stoppedResolvers: { resolve: (r: { videoId: string }) => void; reject: (e: Error) => void }[];
 }
 
@@ -89,6 +105,95 @@ const AV_SYNC_TOLERANCE_SEC = 0.3;
 
 function tmpRoot(): string {
   return path.join(app.getPath('userData'), 'recordings-tmp');
+}
+
+/**
+ * Put a recording failure somewhere the user will actually see it. The toast
+ * broadcast only reaches open windows, and the intended workflow (filming from
+ * the launcher with the library closed) has none - so anything important also
+ * goes out as a system notification, and anything data-loss-shaped opens the
+ * library window so the recovery banner has somewhere to land.
+ */
+function notifyUser(kind: 'info' | 'error', text: string, opts?: { openLibrary?: boolean }): void {
+  const recording = active !== null;
+  const anyVisible = BrowserWindow.getAllWindows().some((w) => !w.isDestroyed() && w.isVisible());
+  broadcast('ol:toast', { kind, text });
+  // During a recording the only visible windows are overlays that render no
+  // toasts, so the system notification is the surface that reaches the user.
+  if ((kind === 'error' || recording || !anyVisible) && Notification.isSupported()) {
+    try {
+      new Notification({ title: 'Open Loom', body: text }).show();
+    } catch (err) {
+      log.warn(`notification failed: ${String(err)}`);
+    }
+  }
+  if (opts?.openLibrary) createMainWindow();
+}
+
+/** Tell open windows the recoverable set changed so banners refresh now, not at next launch. */
+function broadcastRecoverablesChanged(): void {
+  broadcast('ol:recoverable-added', null);
+}
+
+/**
+ * End a chunk stream without ever hanging: `end`'s callback rides on 'finish',
+ * which never fires once the stream has errored (full disk), so resolve on
+ * either outcome.
+ */
+function endStreamSafe(stream: fs.WriteStream): Promise<void> {
+  return new Promise((resolve) => {
+    if (stream.destroyed || stream.writableFinished) {
+      resolve();
+      return;
+    }
+    stream.once('error', () => resolve());
+    stream.end(() => resolve());
+  });
+}
+
+/**
+ * An unhandled 'error' on the chunk stream is an uncaught exception that takes
+ * the whole app down mid-take (full disk, unplugged volume). Handle it: keep
+ * what was written, reset the session and tell the user what happened.
+ */
+function armChunkStream(rec: ActiveRecording): void {
+  rec.stream.on('error', (err) => {
+    log.error(`chunk stream error for ${rec.tempId}: ${String(err)}`);
+    if (active !== rec) return; // late error after the session already moved on
+    failActiveRecording(
+      'Recording stopped: the video could not be written to disk (it may be full). What was captured so far is saved - recover it from the library.'
+    );
+  });
+}
+
+/**
+ * A recording died under the user (engine crash, dead disk, stalled encoder).
+ * Keep the chunks recoverable, reset the session and surface the failure
+ * loudly - this is the path a person filming a client proposal depends on.
+ */
+function failActiveRecording(message: string): void {
+  const rec = active;
+  active = null;
+  stopTick();
+  closeSessionWindows();
+  clearPendingCapture();
+  if (rec) {
+    void endStreamSafe(rec.stream);
+    writeManifest(rec, 'recording');
+    broadcastRecoverablesChanged();
+  }
+  emitState({ status: 'idle', elapsedSec: 0, error: message });
+  notifyUser('error', message, { openLibrary: true });
+}
+
+/** Free bytes on the volume holding `dir`; null when the platform cannot say. */
+function freeBytesAt(dir: string): number | null {
+  try {
+    const s = fs.statfsSync(dir);
+    return Number(s.bavail) * Number(s.bsize);
+  } catch {
+    return null;
+  }
 }
 
 function elapsedSec(rec: ActiveRecording): number {
@@ -142,13 +247,56 @@ function writeManifest(rec: ActiveRecording, status: 'recording' | 'completed'):
   }
 }
 
+/** Sample the disk this often during a recording (in 1s ticks). */
+const DISK_SAMPLE_TICKS = 10;
+let tickCount = 0;
+
 function startTick(): void {
   stopTick();
+  tickCount = 0;
   tickTimer = setInterval(() => {
     if (!active) return;
     emitState();
     if (active.status === 'recording') {
       writeManifest(active, 'recording');
+
+      // Dead-engine watchdog: the HUD must never count over a take that is no
+      // longer being captured. Chunks arrive every second; a silent engine is
+      // crashed or wedged either way, and the user needs to know NOW.
+      if (chunkWatchdogTripped(active.status, active.lastChunkAt, Date.now())) {
+        log.error(`no chunks for ${Date.now() - active.lastChunkAt}ms; treating the take as broken`);
+        failActiveRecording(
+          'Recording stopped: the capture engine stopped responding. Everything captured up to now is saved - recover it from the library.'
+        );
+        return;
+      }
+
+      // Sustained write backpressure: the disk cannot keep up and buffered
+      // chunks are piling up in memory. Warn once; the low-disk stop below
+      // covers the usual cause (a nearly full disk).
+      if (!active.lowDiskWarned && active.stream.writableLength > 64 * 1024 * 1024) {
+        active.lowDiskWarned = true;
+        notifyUser('error', 'Your disk is not keeping up with the recording. Consider stopping soon to make sure the take saves.');
+      }
+
+      tickCount += 1;
+      if (tickCount % DISK_SAMPLE_TICKS === 0) {
+        const free = freeBytesAt(active.dir);
+        if (free !== null) {
+          const verdict = freeSpaceVerdict(free);
+          if (verdict === 'critical') {
+            log.warn(`free space critical (${free} bytes); auto-stopping to save the take`);
+            notifyUser('error', 'Your disk is almost full - stopping and saving the recording now.');
+            void stopRecording().catch((err) => log.error(`low-disk auto-stop failed: ${String(err)}`));
+            return;
+          }
+          if (verdict === 'low' && !active.lowDiskWarned) {
+            active.lowDiskWarned = true;
+            notifyUser('error', 'Your disk is running low on space. The recording will stop and save itself before the disk fills.');
+          }
+        }
+      }
+
       const maxMin = getSettings().recording.maxDurationMin;
       if (maxMin > 0 && elapsedSec(active) >= maxMin * 60) {
         log.info(`max duration of ${maxMin} min reached; stopping`);
@@ -191,6 +339,21 @@ export async function startRecording(opts: RecordingOptions): Promise<void> {
   const tempId = `rec-${Date.now().toString(36)}-${nanoid(6)}`;
   const dir = path.join(tmpRoot(), tempId);
   fs.mkdirSync(dir, { recursive: true });
+  // Pre-flight: refuse to start a take the disk cannot hold. Running out
+  // mid-recording used to be a hard crash (see armChunkStream).
+  const free = freeBytesAt(dir);
+  if (free !== null) {
+    const block = startBlockMessage(free, opts.quality);
+    if (block) {
+      try {
+        fs.rmSync(dir, { recursive: true, force: true });
+      } catch {
+        /* best effort */
+      }
+      notifyUser('error', block);
+      throw new Error(block);
+    }
+  }
   const chunkFile = path.join(dir, 'chunks.bin');
   const stream = fs.createWriteStream(chunkFile, { flags: 'a' });
 
@@ -219,13 +382,22 @@ export async function startRecording(opts: RecordingOptions): Promise<void> {
     micOn: opts.micOn,
     drawOn: false,
     cancelled: false,
+    lastChunkAt: 0,
+    lowDiskWarned: false,
+    cameraLostNotified: false,
     stoppedResolvers: [],
   };
+  const rec = active;
+  armChunkStream(rec);
 
   try {
     if (opts.mode !== 'cam' && opts.sourceId) {
       setPendingCapture(opts.sourceId, opts.systemAudio);
     }
+
+    // Release the launcher's camera BEFORE warming the bubble so the two
+    // renderers never fight over the device during startup.
+    destroyLauncher('recording starting');
 
     // Warm the face bubble NOW: the window and its camera stream spin up in
     // parallel with the engine + countdown, so the circle is live from the
@@ -240,15 +412,19 @@ export async function startRecording(opts: RecordingOptions): Promise<void> {
       showCountdown(display);
       await waitForCountdown();
       destroyCountdown();
-      if (!active || active.cancelled) return;
+      // The session may no longer be ours: a stop or cancel during the 3-2-1
+      // must never walk on into a capture over a finalised session.
+      if (active !== rec || rec.cancelled || rec.status !== 'countdown') return;
     }
 
-    await beginEngineCapture();
+    await beginEngineCapture(rec);
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     // Carry the failure on the state broadcast too: the launcher window that
     // initiated the start is destroyed with the session, so the invoke
     // rejection alone can land in a dead renderer.
-    await hardResetSession(err instanceof Error ? err.message : String(err));
+    await hardResetSession(rec, message);
+    notifyUser('error', `Recording did not start: ${message}`);
     throw err instanceof Error ? err : new Error(String(err));
   }
 }
@@ -285,23 +461,34 @@ function waitForCountdown(): Promise<void> {
   });
 }
 
-async function beginEngineCapture(): Promise<void> {
-  const rec = active;
-  if (!rec) return;
+async function beginEngineCapture(rec: ActiveRecording): Promise<void> {
+  // The session must still be ours and still pre-capture: a stop or cancel
+  // that raced the countdown means this begin belongs to a dead session.
+  if (active !== rec || rec.cancelled || rec.status !== 'countdown') return;
   const settings = getSettings();
   const engine = getOrCreateEngineWindow();
+  armEngineCrashWatch(engine);
 
   const started = new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error('Recording did not start. Check screen permissions in Setup and try again.')),
-      20_000
-    );
-    engineStartWaiter = (err) => {
-      clearTimeout(timer);
-      engineStartWaiter = null;
-      if (err) reject(new Error(err));
-      else resolve();
+    const waiter: EngineStartWaiter = {
+      rec,
+      settle: (err) => {
+        clearTimeout(timer);
+        if (engineStartWaiter === waiter) engineStartWaiter = null;
+        if (err) reject(new Error(err));
+        else resolve();
+      },
     };
+    const timer = setTimeout(() => {
+      // Only time out the CURRENT session. A stale timer from an abandoned
+      // start must never reject (and thereby reset) the take that replaced it.
+      if (engineStartWaiter === waiter) {
+        waiter.settle('Recording did not start. Check screen permissions in Setup and try again.');
+      } else {
+        resolve();
+      }
+    }, 20_000);
+    engineStartWaiter = waiter;
   });
 
   engine.webContents.send('engine:begin', {
@@ -322,6 +509,7 @@ async function beginEngineCapture(): Promise<void> {
 
   rec.status = 'recording';
   rec.segmentStartedAt = Date.now();
+  rec.lastChunkAt = Date.now();
   writeManifest(rec, 'recording');
 
   showHud(rec.display);
@@ -337,8 +525,40 @@ async function beginEngineCapture(): Promise<void> {
   log.info(`recording started (${rec.opts.mode}, ${rec.opts.quality}@${rec.opts.fps}, mime=${rec.mimeType})`);
 }
 
-let engineStartWaiter: ((err?: string) => void) | null = null;
+/** Tied to the session that armed it, so stale settles can be recognised and ignored. */
+interface EngineStartWaiter {
+  rec: ActiveRecording;
+  settle: (err?: string) => void;
+}
+let engineStartWaiter: EngineStartWaiter | null = null;
 let engineStopWaiter: (() => void) | null = null;
+
+/**
+ * The engine renderer can die outright (a 4K compositor is a realistic OOM
+ * candidate) and IPC-based liveness never notices: nothing arrives, and the
+ * HUD keeps counting over a take that is no longer captured. Watch the
+ * process itself; the chunk watchdog in the tick covers wedged-but-alive.
+ */
+const crashWatchedEngines = new WeakSet<Electron.WebContents>();
+
+function armEngineCrashWatch(engine: BrowserWindow): void {
+  if (crashWatchedEngines.has(engine.webContents)) return;
+  crashWatchedEngines.add(engine.webContents);
+  engine.webContents.on('render-process-gone', (_event, details) => {
+    log.error(`engine renderer gone (${details.reason})`);
+    destroyEngineWindow();
+    const waiter = engineStartWaiter;
+    if (waiter) {
+      waiter.settle('The recorder engine crashed before the recording started. Try again.');
+      return;
+    }
+    if (active) {
+      failActiveRecording(
+        'Recording stopped: the capture engine crashed. Everything captured up to now is saved - recover it from the library.'
+      );
+    }
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Pause / resume / stop / cancel / restart
@@ -361,14 +581,32 @@ export async function resumeRecording(): Promise<void> {
   if (!rec || rec.status !== 'paused') return;
   getOrCreateEngineWindow().webContents.send('engine:resume', null);
   rec.segmentStartedAt = Date.now();
+  // Fresh watchdog window: a paused recorder emits no chunks by design.
+  rec.lastChunkAt = Date.now();
   rec.status = 'recording';
   emitState();
 }
 
+/**
+ * Ceiling on finalisation: the ffmpeg queue is serial and shared with editor
+ * and transcription jobs, so a stop can otherwise sit in "Processing" forever
+ * with no escape. On timeout the capture stays recoverable; if the transcode
+ * still lands later it simply replaces the recoverable with the real video.
+ */
+const FINALIZE_CEILING_MS = 10 * 60_000;
+
 export async function stopRecording(): Promise<{ videoId: string }> {
   const rec = active;
   if (!rec) throw new Error('Nothing is recording.');
-  if (rec.status === 'processing') {
+  const intent = stopIntent(rec.status);
+  if (intent === 'cancel') {
+    // Stop during the 3-2-1: nothing has been captured, so this is a cancel.
+    // Routing it into the stop path could resurrect a finalised session and
+    // write into a closed file.
+    await cancelRecording();
+    throw new Error('The recording had not started yet, so it was cancelled.');
+  }
+  if (intent === 'queue') {
     return new Promise((resolve, reject) => rec.stoppedResolvers.push({ resolve, reject }));
   }
   if (rec.segmentStartedAt) {
@@ -395,30 +633,82 @@ export async function stopRecording(): Promise<{ videoId: string }> {
   getOrCreateEngineWindow().webContents.send('engine:stop', null);
   await engineStopped;
 
-  await new Promise<void>((resolve) => rec.stream.end(resolve));
+  await endStreamSafe(rec.stream);
   clearPendingCapture();
 
   return new Promise<{ videoId: string }>((resolve, reject) => {
     rec.stoppedResolvers.push({ resolve, reject });
+    let settled = false;
+    const ceiling = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      log.error(`finalize exceeded ${FINALIZE_CEILING_MS}ms; releasing the session, capture stays recoverable`);
+      if (active === rec) active = null;
+      const msg =
+        'Processing is taking too long, so the app has stopped waiting. Your capture is safe - recover it from the library.';
+      emitState({ status: 'idle', elapsedSec: 0, error: msg });
+      broadcastRecoverablesChanged();
+      notifyUser('error', msg, { openLibrary: true });
+      for (const r of rec.stoppedResolvers) r.reject(new Error(msg));
+    }, FINALIZE_CEILING_MS);
     void finalizeRecording(rec)
       .then((videoId) => {
+        clearTimeout(ceiling);
+        const late = settled;
+        settled = true;
         if (active === rec) active = null;
         emitState({ status: 'idle', elapsedSec: 0, lastVideoId: videoId });
+        if (late) {
+          // The transcode landed after the ceiling gave up on it: the video is
+          // real, the recoverable it replaced is gone - refresh the banners.
+          log.info(`late finalize landed as ${videoId}`);
+          broadcastRecoverablesChanged();
+        }
+        maybeOpenWatchOnStop(videoId);
         maybeAutoShareOnStop(videoId);
         for (const r of rec.stoppedResolvers) r.resolve({ videoId });
       })
       .catch((err: unknown) => {
+        clearTimeout(ceiling);
+        if (settled) return;
+        settled = true;
         log.error(`finalize failed: ${String(err)}`);
         if (active === rec) active = null;
-        emitState({ status: 'idle', elapsedSec: 0, error: humanProcessingError(err) });
+        const msg = humanProcessingError(err);
+        emitState({ status: 'idle', elapsedSec: 0, error: msg });
+        // The raw capture was kept - make sure the user can find it NOW, not
+        // at the next launch, even with every window closed.
+        broadcastRecoverablesChanged();
+        notifyUser('error', msg, { openLibrary: true });
         for (const r of rec.stoppedResolvers) r.reject(err instanceof Error ? err : new Error(String(err)));
       });
   });
 }
 
+/**
+ * A take that finished with the library window closed used to end on a bare
+ * launcher with no sign the video exists. Open the library on the Watch view
+ * so "your recording is ready" actually reads that way; the id is handed to
+ * the fresh window via takePendingWatch since the state broadcast fires
+ * before its renderer subscribes.
+ */
+let pendingWatchVideoId: string | null = null;
+
+export function takePendingWatch(): string | null {
+  const id = pendingWatchVideoId;
+  pendingWatchVideoId = null;
+  return id;
+}
+
+function maybeOpenWatchOnStop(videoId: string): void {
+  if (getMainWindow()) return; // the open window navigates off the state broadcast
+  pendingWatchVideoId = videoId;
+  createMainWindow();
+}
+
 function humanProcessingError(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
-  return `We could not finish processing this recording: ${msg} The raw capture is kept and offered for recovery next launch.`;
+  return `We could not finish processing this recording: ${msg} The raw capture is kept - recover it from the library.`;
 }
 
 /**
@@ -456,26 +746,51 @@ function maybeAutoShareOnStop(videoId: string): void {
     });
 }
 
-export async function cancelRecording(): Promise<void> {
+export async function cancelRecording(opts?: { quiet?: boolean }): Promise<void> {
   const rec = active;
   if (!rec) return;
   rec.cancelled = true;
   if (countdownWaiter) countdownWaiter();
+  // Release a start still in flight quietly: its begin path re-checks session
+  // ownership after the await, and its 20s timer must not fire a false
+  // "did not start" long after the user cancelled.
+  if (engineStartWaiter && engineStartWaiter.rec === rec) engineStartWaiter.settle();
   getOrCreateEngineWindow().webContents.send('engine:cancel', null);
-  await hardResetSession();
-  log.info('recording cancelled');
+  // Cancel rides on a global hotkey one mis-press away from pause: a take
+  // with real content in it is parked as recoverable instead of deleted, so
+  // a slip never destroys minutes of capture with no undo.
+  const keep =
+    (rec.status === 'recording' || rec.status === 'paused') && keepChunksOnCancel(elapsedSec(rec));
+  if (keep) {
+    active = null;
+    stopTick();
+    closeSessionWindows();
+    clearPendingCapture();
+    await endStreamSafe(rec.stream);
+    writeManifest(rec, 'recording');
+    broadcastRecoverablesChanged();
+    emitState({ status: 'idle', elapsedSec: 0 });
+    if (!opts?.quiet) {
+      notifyUser('info', 'Recording discarded. It is kept for now in case that was a slip - recover or delete it from the library.');
+    }
+  } else {
+    await hardResetSession(rec);
+  }
+  log.info(`recording cancelled${keep ? ' (kept recoverable)' : ''}`);
 }
 
 export async function restartRecording(): Promise<void> {
   const rec = active;
   if (!rec) return;
   const opts = rec.opts;
-  await cancelRecording();
+  await cancelRecording({ quiet: true });
   // Restart skips the countdown: the user is already set up (Loom behaviour).
   try {
     await startRecordingWithoutCountdown(opts);
   } catch (err) {
-    emitState({ status: 'idle', error: err instanceof Error ? err.message : String(err) });
+    const message = err instanceof Error ? err.message : String(err);
+    emitState({ status: 'idle', error: message });
+    notifyUser('error', `Restart failed: ${message}`);
     throw err;
   }
 }
@@ -510,32 +825,47 @@ async function startRecordingWithoutCountdown(opts: RecordingOptions): Promise<v
     micOn: opts.micOn,
     drawOn: false,
     cancelled: false,
+    lastChunkAt: 0,
+    lowDiskWarned: false,
+    cameraLostNotified: false,
     stoppedResolvers: [],
   };
+  const rec = active;
+  armChunkStream(rec);
   if (opts.mode !== 'cam' && opts.sourceId) setPendingCapture(opts.sourceId, opts.systemAudio);
+  destroyLauncher('recording restarting');
   // Same early warm-up as the countdown path: the camera connects while the
   // engine rebuilds its capture, so restart also starts with a live circle.
   if (opts.mode === 'screen-cam') showBubble(display, getSettings().bubble.size);
   const engine = getOrCreateEngineWindow();
   await whenEngineReady(engine.webContents.id);
-  await beginEngineCapture();
+  await beginEngineCapture(rec);
 }
 
-async function hardResetSession(error?: string): Promise<void> {
-  const rec = active;
-  active = null;
-  stopTick();
-  closeSessionWindows();
-  clearPendingCapture();
+/**
+ * Reset ONE session. Scoped on purpose: a stale failure (an abandoned start's
+ * 20s timer, a late stream error) must only ever clean up its own temp files,
+ * never tear down - let alone delete - a live session that replaced it.
+ */
+async function hardResetSession(rec: ActiveRecording | null, error?: string): Promise<void> {
+  const owns = rec !== null && active === rec;
+  if (owns) {
+    active = null;
+    stopTick();
+    closeSessionWindows();
+    clearPendingCapture();
+  }
   if (rec) {
-    await new Promise<void>((resolve) => rec.stream.end(resolve));
+    await endStreamSafe(rec.stream);
     try {
       fs.rmSync(rec.dir, { recursive: true, force: true });
     } catch (err) {
       log.warn(`temp cleanup failed: ${String(err)}`);
     }
   }
-  emitState({ status: 'idle', elapsedSec: 0, ...(error ? { error } : {}) });
+  if (owns || active === null) {
+    emitState({ status: 'idle', elapsedSec: 0, ...(error ? { error } : {}) });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -677,34 +1007,52 @@ export function registerEngineIpc(): void {
   });
 
   ipcMain.on('engine:started', (_event, info: { mimeType: string }) => {
-    if (active) active.mimeType = info.mimeType;
-    engineStartWaiter?.();
+    const waiter = engineStartWaiter;
+    if (!waiter) return;
+    waiter.rec.mimeType = info.mimeType;
+    waiter.settle();
   });
 
   ipcMain.on('engine:error', (_event, message: string) => {
     log.error(`engine error: ${message}`);
-    if (engineStartWaiter) {
-      engineStartWaiter(message);
-      void hardResetSession();
+    const waiter = engineStartWaiter;
+    if (waiter) {
+      waiter.settle(message);
+      void hardResetSession(waiter.rec, message);
       return;
     }
-    // Mid-recording failure: keep the chunks (recovery) and reset the session.
-    const rec = active;
-    active = null;
-    stopTick();
-    closeSessionWindows();
-    clearPendingCapture();
-    if (rec) {
-      rec.stream.end();
-      writeManifest(rec, 'recording');
+    // Mid-recording failure: keep the chunks (recovery), reset the session
+    // and make sure a person filming with every window closed still hears it.
+    if (active) {
+      failActiveRecording(`${message} Everything captured up to now is saved - recover it from the library.`);
     }
-    emitState({ status: 'idle', elapsedSec: 0, error: message });
   });
 
   ipcMain.on('engine:chunk', (_event, chunk: Uint8Array) => {
     const rec = active;
-    if (!rec) return;
+    // A chunk can arrive after stop ended the stream (a slow engine flush, or
+    // a session the stop timeout gave up on): writing then would raise the
+    // stream error path for a take that already saved cleanly.
+    if (!rec || rec.stream.writableEnded || rec.stream.destroyed) return;
+    rec.lastChunkAt = Date.now();
     rec.stream.write(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength));
+  });
+
+  // The camera died mid-recording (unplugged webcam, USB hub glitch). The
+  // take keeps going - losing the face must never lose the screen - but the
+  // user gets told instead of discovering a frozen face after delivery.
+  ipcMain.on('ol:camera-lost', () => {
+    const rec = active;
+    if (!rec || rec.opts.mode !== 'screen-cam') return;
+    // Full-display capture records the bubble window itself: hide it so a
+    // frozen frame or an error card is not burned into the client video.
+    if (rec.opts.sourceIsDisplay) setBubbleVisible(false);
+    if (rec.cameraLostNotified) return;
+    rec.cameraLostNotified = true;
+    notifyUser(
+      'error',
+      'Your camera stopped working, so the recording is continuing without your face. Reconnect the camera and switch the layout to bring it back.'
+    );
   });
 
   ipcMain.on('engine:stopped', () => {
@@ -740,6 +1088,9 @@ async function finalizeRecording(rec: ActiveRecording): Promise<string> {
     approxDurationSec: durationSec,
     createdAt: new Date(rec.startedAt),
   });
+  // Mark the manifest done BEFORE cleanup: if the rm fails, the leftover dir
+  // must not be offered as a recoverable for a take that saved fine.
+  writeManifest(rec, 'completed');
   try {
     fs.rmSync(rec.dir, { recursive: true, force: true });
   } catch (err) {
@@ -922,6 +1273,33 @@ export async function discardRecoverable(tempId: string): Promise<void> {
 
 export function isRecordingActive(): boolean {
   return active !== null && active.status !== 'processing';
+}
+
+/**
+ * Quitting from the tray mid-recording used to be silent: the take survived
+ * only as a crash-recoverable, minus whatever the write stream had buffered.
+ * Ask first.
+ */
+export function installQuitGuard(): void {
+  app.on('before-quit', (event) => {
+    if (!isRecordingActive()) return;
+    event.preventDefault();
+    const choice = dialog.showMessageBoxSync({
+      type: 'warning',
+      buttons: ['Stop and save', 'Discard recording', 'Keep recording'],
+      defaultId: 0,
+      cancelId: 2,
+      message: 'A recording is still running.',
+      detail: 'Save it before quitting, discard it, or go back to recording.',
+    });
+    if (choice === 0) {
+      void stopRecording()
+        .catch((err) => log.error(`stop on quit failed: ${String(err)}`))
+        .finally(() => app.quit());
+    } else if (choice === 1) {
+      void cancelRecording().finally(() => app.quit());
+    }
+  });
 }
 
 export function isPaused(): boolean {

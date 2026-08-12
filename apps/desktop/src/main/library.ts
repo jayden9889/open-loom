@@ -9,9 +9,11 @@ import path from 'node:path';
 import type { VideoMeta } from '@shared/types';
 import { VIDEO_FILES } from '@shared/types';
 import { LibraryStore } from './library-core';
+import { generatePreviews } from './preview-core';
 import { getSettings } from './settings';
 import { log } from './logger';
-import { requireBinaries, thumbnail, enqueueJob } from './ffmpeg';
+import { broadcast } from './windows';
+import { requireBinaries, thumbnail, gifPreview, waveformPeaks, enqueueJob } from './ffmpeg';
 
 let cached: { dir: string; store: LibraryStore } | null = null;
 
@@ -26,6 +28,9 @@ export function library(): LibraryStore {
         },
         newId: () => nanoid(10),
         warn: (msg) => log.warn(`library: ${msg}`),
+        // Data-loss recoveries (corrupt library.json / meta.json) must reach
+        // the user, not just the log file they will never open.
+        notify: (msg) => broadcast('ol:toast', { kind: 'error', text: msg }),
       }),
     };
   }
@@ -95,4 +100,38 @@ export async function setCustomThumbnail(
     throw new Error('Pick an image file or a frame time for the thumbnail.');
   }
   store.update(id, { customThumb: true });
+}
+
+/**
+ * Rebuild thumb.jpg / preview.gif / waveform.json for an existing recording.
+ * User-initiated from the library card when preview generation failed after
+ * the recording landed, so unlike that best-effort pass a total failure here
+ * must surface rather than vanish into the log.
+ */
+export async function regeneratePreviews(id: string): Promise<void> {
+  const store = library();
+  const meta = store.get(id);
+  const dir = store.videoDir(id);
+  const videoPath = path.join(dir, VIDEO_FILES.video);
+  if (!fs.existsSync(videoPath)) {
+    throw new Error('The video file for this recording is missing, so its previews cannot be rebuilt.');
+  }
+  const bins = requireBinaries();
+  const thumbPath = path.join(dir, VIDEO_FILES.thumb);
+  const failed = await generatePreviews({
+    thumbnail: async () => {
+      // A thumbnail the user set deliberately is kept; only derived previews rebuild.
+      if (meta.customThumb && fs.existsSync(thumbPath)) return;
+      await enqueueJob(id, 'thumbnail', () => thumbnail(bins, videoPath, thumbPath, meta.durationSec * 0.25));
+    },
+    gif: () => enqueueJob(id, 'gif', () => gifPreview(bins, videoPath, path.join(dir, VIDEO_FILES.preview))),
+    waveform: () =>
+      enqueueJob(id, 'waveform', async () => {
+        await waveformPeaks(bins, videoPath, path.join(dir, VIDEO_FILES.waveform));
+      }),
+    warn: (msg) => log.warn(`${id}: ${msg}`),
+  });
+  if (failed.length > 0) {
+    throw new Error(`Some previews could not be rebuilt (${failed.join(', ')}). The recording itself is fine.`);
+  }
 }

@@ -53,6 +53,21 @@ function humanFetchError(action: string, err: unknown): Error {
 }
 
 /**
+ * An HTTP error the share server itself answered (as opposed to a network
+ * failure that never reached it). Carrying the status lets remove() tell "the
+ * server confirms this row is gone" (404) apart from every other failure.
+ */
+export class ServerApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number
+  ) {
+    super(message);
+    this.name = 'ServerApiError';
+  }
+}
+
+/**
  * Recover the remote video id from a `/v/:id` share URL, falling back to the
  * local id. Used to reuse an already-created remote row on retry / caption
  * re-sync so we never POST a fresh create (which the server answers with a
@@ -95,8 +110,9 @@ export class ServerShareProvider implements ShareProvider {
     }
     const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     if (!res.ok) {
-      throw new Error(
-        typeof data.error === 'string' ? data.error : `The share server answered ${res.status} for ${method} ${apiPath}.`
+      throw new ServerApiError(
+        typeof data.error === 'string' ? data.error : `The share server answered ${res.status} for ${method} ${apiPath}.`,
+        res.status
       );
     }
     return data;
@@ -130,7 +146,7 @@ export class ServerShareProvider implements ShareProvider {
    * orphan row is minted.
    */
   resumeShare(meta: VideoMeta): ShareResult {
-    const remoteId = remoteIdFromShareUrl(meta.share?.url, meta.id);
+    const remoteId = meta.share?.remoteId ?? remoteIdFromShareUrl(meta.share?.url, meta.id);
     const shareUrl = meta.share?.url || `${this.base()}/v/${remoteId}`;
     const files: UploadPlanFile[] = FILE_MAP.map((f) => ({ name: f.local, remote: f.remote, required: f.required }));
     return { shareUrl, uploadPlan: { videoId: meta.id, files, context: { remoteId } } };
@@ -143,7 +159,7 @@ export class ServerShareProvider implements ShareProvider {
    * share once it exists. video.mp4 is not re-listed, so nothing large moves.
    */
   captionsPlan(meta: VideoMeta): UploadPlan {
-    const remoteId = remoteIdFromShareUrl(meta.share?.url, meta.id);
+    const remoteId = meta.share?.remoteId ?? remoteIdFromShareUrl(meta.share?.url, meta.id);
     const files: UploadPlanFile[] = [{ name: 'transcript.vtt', remote: 'captions.vtt', required: false }];
     return { videoId: meta.id, files, context: { remoteId } };
   }
@@ -172,7 +188,8 @@ export class ServerShareProvider implements ShareProvider {
     remoteId: string,
     localPath: string,
     remoteName: string,
-    onProgress: (pct: number) => void
+    onBytes: (bytesDone: number) => void,
+    signal?: AbortSignal
   ): Promise<void> {
     const size = fs.statSync(localPath).size;
     let offset = await this.currentOffset(remoteId, remoteName);
@@ -189,8 +206,10 @@ export class ServerShareProvider implements ShareProvider {
             method: 'PUT',
             headers: this.headers(),
             body: new Uint8Array(buf),
+            signal,
           });
         } catch (err) {
+          if (signal?.aborted) throw err;
           throw humanFetchError(`upload ${remoteName}`, err);
         }
         if (res.status === 409) {
@@ -201,38 +220,74 @@ export class ServerShareProvider implements ShareProvider {
         }
         if (!res.ok) {
           const data = (await res.json().catch(() => ({}))) as { error?: string };
-          throw new Error(data.error ?? `The share server answered ${res.status} while uploading ${remoteName}.`);
+          throw new ServerApiError(
+            data.error ?? `The share server answered ${res.status} while uploading ${remoteName}.`,
+            res.status
+          );
         }
         offset += len;
-        onProgress(size === 0 ? 100 : Math.round((offset / size) * 100));
+        onBytes(offset);
       }
-      if (size === 0) onProgress(100);
+      onBytes(size);
     } finally {
       fs.closeSync(fd);
     }
   }
 
-  async upload(plan: UploadPlan, filesDir: string, onProgress: UploadProgress): Promise<void> {
+  async upload(plan: UploadPlan, filesDir: string, onProgress: UploadProgress, signal?: AbortSignal): Promise<void> {
     const remoteId = this.remoteId(plan);
+    // Weight progress by bytes across the whole plan so the bar is monotonic:
+    // per-file percentages made it visibly snap back to 0 between files.
+    const sizes = new Map<string, number>();
     for (const file of plan.files) {
       const localPath = path.join(filesDir, file.name);
-      if (!fs.existsSync(localPath)) {
+      if (fs.existsSync(localPath)) sizes.set(file.name, fs.statSync(localPath).size);
+    }
+    const totalBytes = [...sizes.values()].reduce((a, b) => a + b, 0);
+    let doneBytes = 0;
+    for (const file of plan.files) {
+      const localPath = path.join(filesDir, file.name);
+      if (!sizes.has(file.name)) {
         if (file.required) throw new Error(`${file.name} is missing from the video folder; nothing to upload.`);
         continue;
       }
-      await this.uploadFile(remoteId, localPath, file.remote, (pct) =>
-        onProgress({ file: file.name, pct, note: `Uploading ${file.name}` })
+      await this.uploadFile(
+        remoteId,
+        localPath,
+        file.remote,
+        (bytes) =>
+          onProgress({
+            file: file.name,
+            pct: totalBytes === 0 ? 100 : Math.min(99, Math.round(((doneBytes + bytes) / totalBytes) * 100)),
+            note: `Uploading ${file.name}`,
+          }),
+        signal
       );
+      doneBytes += sizes.get(file.name) ?? 0;
     }
-    await this.api('POST', `/videos/${remoteId}/complete`);
+    // A captions-only plan must not POST complete: the server rejects complete
+    // with 409 until video.mp4 exists, which happens whenever transcription
+    // finishes before the main upload does. The main upload's own complete
+    // registers the captions afterwards.
+    if (plan.files.some((f) => f.remote === 'video.mp4')) {
+      await this.api('POST', `/videos/${remoteId}/complete`);
+    }
+    // The per-chunk emission is capped at 99 so the bar cannot show a finished
+    // upload while the final request is still in flight. Nothing else would
+    // ever emit 100, so the bar would sit at 99 on a perfectly good upload.
+    onProgress({ file: '', pct: 100, note: 'Upload complete' });
   }
 
   async remove(videoId: string): Promise<void> {
     try {
       await this.api('DELETE', `/videos/${videoId}`);
     } catch (err) {
-      // Already gone on the server = success for the caller's intent.
-      if (err instanceof Error && /not found/i.test(err.message)) return;
+      // ONLY a server-confirmed 404 means the row is already gone (= success
+      // for the caller's intent). A message-text match would also swallow
+      // network failures and proxy error pages that merely mention "not
+      // found", reporting an unreachable server as a completed delete while
+      // the public link stays live.
+      if (err instanceof ServerApiError && err.status === 404) return;
       throw err;
     }
   }

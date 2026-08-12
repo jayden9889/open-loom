@@ -25,15 +25,30 @@ export const KEYFRAME_TOLERANCE_SEC = 0.15;
 // Shared ffmpeg runner (progress via -progress pipe:1)
 // ---------------------------------------------------------------------------
 
+/** Thrown when an edit job is cancelled; callers surface it as info, not failure. */
+export class EditCancelledError extends Error {
+  constructor() {
+    super('The edit was cancelled.');
+    this.name = 'EditCancelledError';
+  }
+}
+
 function runFfmpeg(
   bin: string,
   args: string[],
-  onProgressSec?: (sec: number) => void
+  onProgressSec?: (sec: number) => void,
+  signal?: AbortSignal
 ): Promise<void> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new EditCancelledError());
+      return;
+    }
     const child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     let stderrTail = '';
     let lineBuf = '';
+    const onAbort = () => child.kill('SIGTERM');
+    signal?.addEventListener('abort', onAbort, { once: true });
     child.stdout.on('data', (chunk: Buffer) => {
       lineBuf += chunk.toString('utf8');
       let idx: number;
@@ -47,9 +62,14 @@ function runFfmpeg(
     child.stderr.on('data', (chunk: Buffer) => {
       stderrTail = (stderrTail + chunk.toString('utf8')).slice(-4000);
     });
-    child.on('error', (err) => reject(new Error(`Failed to run ffmpeg: ${err.message}`)));
+    child.on('error', (err) => {
+      signal?.removeEventListener('abort', onAbort);
+      reject(new Error(`Failed to run ffmpeg: ${err.message}`));
+    });
     child.on('close', (code) => {
-      if (code === 0) resolve();
+      signal?.removeEventListener('abort', onAbort);
+      if (signal?.aborted) reject(new EditCancelledError());
+      else if (code === 0) resolve();
       else reject(new Error(`ffmpeg exited with code ${code}: ${stderrTail.trim().slice(-600)}`));
     });
   });
@@ -159,7 +179,8 @@ export async function trimVideoFile(
   input: string,
   output: string,
   rawRanges: KeepRange[],
-  onProgress?: (pct: number, note?: string) => void
+  onProgress?: (pct: number, note?: string) => void,
+  signal?: AbortSignal
 ): Promise<TrimResult> {
   const info = await probe(bins, input);
   const ranges = normalizeRanges(rawRanges, info.durationSec);
@@ -169,9 +190,9 @@ export async function trimVideoFile(
   onProgress?.(5, note);
 
   if (method === 'copy') {
-    await trimByCopy(bins, input, output, snapped, (pct) => onProgress?.(pct, note));
+    await trimByCopy(bins, input, output, snapped, (pct) => onProgress?.(pct, note), signal);
   } else {
-    await trimByReencode(bins, input, output, ranges, info, (pct) => onProgress?.(pct, note));
+    await trimByReencode(bins, input, output, ranges, info, (pct) => onProgress?.(pct, note), signal);
   }
   const outInfo = await probe(bins, output);
   onProgress?.(100, note);
@@ -183,7 +204,8 @@ async function trimByCopy(
   input: string,
   output: string,
   ranges: KeepRange[],
-  onProgress: (pct: number) => void
+  onProgress: (pct: number) => void,
+  signal?: AbortSignal
 ): Promise<void> {
   if (ranges.length === 1) {
     const r = ranges[0]!;
@@ -196,7 +218,7 @@ async function trimByCopy(
       '-avoid_negative_ts', 'make_zero',
       '-movflags', '+faststart',
       output,
-    ]);
+    ], undefined, signal);
     onProgress(95);
     return;
   }
@@ -215,11 +237,11 @@ async function trimByCopy(
         '-c', 'copy',
         '-avoid_negative_ts', 'make_zero',
         part,
-      ]);
+      ], undefined, signal);
       parts.push(part);
       onProgress(5 + Math.round(((i + 1) / (ranges.length + 1)) * 85));
     }
-    await concatDemux(bins, parts, output);
+    await concatDemux(bins, parts, output, work, signal);
     onProgress(95);
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
@@ -232,7 +254,8 @@ async function trimByReencode(
   output: string,
   ranges: KeepRange[],
   info: ProbeResult,
-  onProgress: (pct: number) => void
+  onProgress: (pct: number) => void,
+  signal?: AbortSignal
 ): Promise<void> {
   const hasAudio = info.audioCodec !== null;
   const parts: string[] = [];
@@ -266,11 +289,22 @@ async function trimByReencode(
   ];
   await runFfmpeg(bins.ffmpeg, args, (sec) => {
     if (total > 0) onProgress(5 + Math.min(90, Math.round((sec / total) * 90)));
-  });
+  }, signal);
 }
 
-async function concatDemux(bins: FfmpegBinaries, parts: string[], output: string): Promise<void> {
-  const listFile = path.join(path.dirname(parts[0]!), 'concat.txt');
+/**
+ * Concat-copy `parts` into `output`. The list file goes into `listDir`, which
+ * must be a temp dir owned by the caller: writing it next to the parts left a
+ * stray concat.txt in the user's library folder on the stitch path.
+ */
+async function concatDemux(
+  bins: FfmpegBinaries,
+  parts: string[],
+  output: string,
+  listDir: string,
+  signal?: AbortSignal
+): Promise<void> {
+  const listFile = path.join(listDir, 'concat.txt');
   // The concat demuxer is line-based, so a newline in a path (legal on macOS,
   // and saveDir is user-chosen) would inject a second directive.
   for (const p of parts) {
@@ -288,18 +322,37 @@ async function concatDemux(bins: FfmpegBinaries, parts: string[], output: string
     '-c', 'copy',
     '-movflags', '+faststart',
     output,
-  ]);
+  ], undefined, signal);
 }
 
 // ---------------------------------------------------------------------------
 // Stitch (E3: append another video)
 // ---------------------------------------------------------------------------
 
+/**
+ * 'copy' = both clips joined losslessly. 'append-reencode' = only the appended
+ * clip was re-encoded to match; the main video's bytes are untouched.
+ * 'reencode' = both clips went through the normalising encode.
+ */
+export type StitchMethod = EditMethod | 'append-reencode';
+
 export interface StitchResult {
-  method: EditMethod;
+  method: StitchMethod;
   durationSec: number;
 }
 
+export interface StitchOptions {
+  signal?: AbortSignal;
+  /** Optional in/out points applied to the appended clip before the join. */
+  appendRange?: KeepRange;
+}
+
+/**
+ * Lossless concat is only safe when every stream parameter matches. Codec name,
+ * frame size and fps alone are not enough: a sample-rate or channel-layout
+ * mismatch concat-copies into a file whose audio plays at the wrong pitch or
+ * drifts, and the duration guard cannot catch that.
+ */
 function sameCodecFamily(a: ProbeResult, b: ProbeResult): boolean {
   return (
     a.videoCodec === 'h264' &&
@@ -307,8 +360,36 @@ function sameCodecFamily(a: ProbeResult, b: ProbeResult): boolean {
     a.width === b.width &&
     a.height === b.height &&
     Math.abs(a.fps - b.fps) < 0.5 &&
-    ((a.audioCodec === 'aac' && b.audioCodec === 'aac') || (a.audioCodec === null && b.audioCodec === null))
+    (a.videoPixFmt === b.videoPixFmt || !a.videoPixFmt || !b.videoPixFmt) &&
+    ((a.audioCodec === 'aac' &&
+      b.audioCodec === 'aac' &&
+      a.audioSampleRate === b.audioSampleRate &&
+      a.audioChannels === b.audioChannels) ||
+      (a.audioCodec === null && b.audioCodec === null))
   );
+}
+
+/**
+ * Whether the appended clip alone can be normalised to the main video's
+ * parameters and then concat-copied, leaving the main video's bytes untouched.
+ * Needs the main video to already be H.264 with AAC-or-no audio, and an audio
+ * layout the encoder can reproduce. A silent main with a voiced append falls
+ * to the full re-encode instead, so the appended clip's audio is not dropped.
+ */
+function canNormaliseAppendOnly(main: ProbeResult, append: ProbeResult): boolean {
+  if (main.videoCodec !== 'h264') return false;
+  if (main.audioCodec === null) return append.audioCodec === null;
+  if (main.audioCodec !== 'aac') return false;
+  const channels = main.audioChannels ?? 2;
+  return channels === 1 || channels === 2;
+}
+
+/** libx264 -profile:v value matching the main video's reported profile, if any. */
+function x264Profile(reported: string): string | null {
+  if (/baseline/i.test(reported)) return 'baseline';
+  if (/^main$/i.test(reported.trim())) return 'main';
+  if (/^high$/i.test(reported.trim())) return 'high';
+  return null;
 }
 
 export async function stitchVideoFiles(
@@ -316,38 +397,133 @@ export async function stitchVideoFiles(
   mainFile: string,
   appendFile: string,
   output: string,
-  onProgress?: (pct: number, note?: string) => void
+  onProgress?: (pct: number, note?: string) => void,
+  opts: StitchOptions = {}
 ): Promise<StitchResult> {
-  const mainInfo = await probe(bins, mainFile);
-  const appendInfo = await probe(bins, appendFile);
-  const expected = mainInfo.durationSec + appendInfo.durationSec;
+  const { signal } = opts;
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'openloom-stitch-'));
+  try {
+    let appendSrc = appendFile;
+    if (opts.appendRange) {
+      onProgress?.(3, 'Trimming the new clip');
+      appendSrc = path.join(work, 'append-trimmed.mp4');
+      await trimVideoFile(bins, appendFile, appendSrc, [opts.appendRange], undefined, signal);
+    }
 
-  if (sameCodecFamily(mainInfo, appendInfo)) {
-    onProgress?.(10, 'Fast lossless join');
-    const work = fs.mkdtempSync(path.join(os.tmpdir(), 'openloom-stitch-'));
-    try {
-      await concatDemux(bins, [mainFile, appendFile], output);
-      const outInfo = await probe(bins, output);
-      // Guard against silent stream-parameter mismatches: fall back if the
-      // joined duration is off by more than a second.
-      if (Math.abs(outInfo.durationSec - expected) <= 1) {
-        onProgress?.(100, 'Fast lossless join');
-        return { method: 'copy', durationSec: outInfo.durationSec };
+    const mainInfo = await probe(bins, mainFile);
+    const appendInfo = await probe(bins, appendSrc);
+    const expected = mainInfo.durationSec + appendInfo.durationSec;
+
+    if (sameCodecFamily(mainInfo, appendInfo)) {
+      onProgress?.(10, 'Fast lossless join');
+      try {
+        await concatDemux(bins, [mainFile, appendSrc], output, work, signal);
+        const outInfo = await probe(bins, output);
+        // Guard against silent stream-parameter mismatches: fall back if the
+        // joined duration is off by more than a second.
+        if (Math.abs(outInfo.durationSec - expected) <= 1) {
+          onProgress?.(100, 'Fast lossless join');
+          return { method: 'copy', durationSec: outInfo.durationSec };
+        }
+      } catch (err) {
+        if (err instanceof EditCancelledError) throw err;
+        // fall through to the normalising paths
       }
-    } catch {
-      // fall through to re-encode
-    } finally {
-      fs.rmSync(work, { recursive: true, force: true });
+    }
+
+    // Formats differ: normalise only the appended clip when possible, so the
+    // main video is never re-encoded (no generation loss, and appending a short
+    // clip to a long recording stays fast).
+    if (canNormaliseAppendOnly(mainInfo, appendInfo)) {
+      onProgress?.(15, 'Matching the new clip to this video');
+      try {
+        const matched = path.join(work, 'append-matched.mp4');
+        await normaliseAppend(bins, appendSrc, matched, mainInfo, appendInfo, (pct) =>
+          onProgress?.(15 + Math.round(pct * 0.6), 'Matching the new clip to this video'), signal
+        );
+        await concatDemux(bins, [mainFile, matched], output, work, signal);
+        const outInfo = await probe(bins, output);
+        if (Math.abs(outInfo.durationSec - expected) <= 1) {
+          onProgress?.(100, 'Matching the new clip to this video');
+          return { method: 'append-reencode', durationSec: outInfo.durationSec };
+        }
+      } catch (err) {
+        if (err instanceof EditCancelledError) throw err;
+        // fall through to the full re-encode
+      }
+    }
+
+    onProgress?.(10, 'Re-encoding to match formats');
+    await stitchByReencode(bins, mainFile, appendSrc, output, mainInfo, appendInfo, (pct) =>
+      onProgress?.(pct, 'Re-encoding to match formats'), signal
+    );
+    const outInfo = await probe(bins, output);
+    onProgress?.(100, 'Re-encoding to match formats');
+    return { method: 'reencode', durationSec: outInfo.durationSec };
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Re-encode only the appended clip to the main video's frame size, fps, pixel
+ * format, profile and audio layout, so a plain concat-copy can follow.
+ */
+async function normaliseAppend(
+  bins: FfmpegBinaries,
+  appendFile: string,
+  output: string,
+  mainInfo: ProbeResult,
+  appendInfo: ProbeResult,
+  onProgress: (pct: number) => void,
+  signal?: AbortSignal
+): Promise<void> {
+  const W = mainInfo.width || 1920;
+  const H = mainInfo.height || 1080;
+  const F = Math.round(mainInfo.fps) || 30;
+  const pixFmt = mainInfo.videoPixFmt || 'yuv420p';
+  const args: string[] = ['-y', '-i', appendFile];
+  const filters: string[] = [
+    `[0:v]fps=${F},scale=${W}:${H}:force_original_aspect_ratio=decrease,` +
+      `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=${pixFmt}[v]`,
+  ];
+
+  const mainHasAudio = mainInfo.audioCodec !== null;
+  if (mainHasAudio) {
+    const rate = mainInfo.audioSampleRate ?? 48000;
+    const layout = (mainInfo.audioChannels ?? 2) === 1 ? 'mono' : 'stereo';
+    if (appendInfo.audioCodec !== null) {
+      filters.push(`[0:a]aresample=${rate},aformat=sample_fmts=fltp:channel_layouts=${layout}[a]`);
+    } else {
+      args.push(
+        '-f', 'lavfi',
+        '-t', Math.max(0.1, appendInfo.durationSec).toFixed(3),
+        '-i', `anullsrc=channel_layout=${layout}:sample_rate=${rate}`
+      );
+      filters.push(`[1:a]anull[a]`);
     }
   }
 
-  onProgress?.(10, 'Re-encoding to match formats');
-  await stitchByReencode(bins, mainFile, appendFile, output, mainInfo, appendInfo, (pct) =>
-    onProgress?.(pct, 'Re-encoding to match formats')
+  const profile = x264Profile(mainInfo.videoProfile);
+  args.push(
+    '-filter_complex', filters.join(';'),
+    '-map', '[v]',
+    ...(mainHasAudio ? ['-map', '[a]'] : []),
+    '-c:v', 'libx264',
+    '-preset', 'veryfast',
+    '-crf', '21',
+    ...(profile ? ['-profile:v', profile] : []),
+    '-pix_fmt', pixFmt,
+    ...(mainHasAudio ? ['-c:a', 'aac', '-b:a', '160k'] : []),
+    '-movflags', '+faststart',
+    '-progress', 'pipe:1',
+    output
   );
-  const outInfo = await probe(bins, output);
-  onProgress?.(100, 'Re-encoding to match formats');
-  return { method: 'reencode', durationSec: outInfo.durationSec };
+
+  const total = appendInfo.durationSec;
+  await runFfmpeg(bins.ffmpeg, args, (sec) => {
+    if (total > 0) onProgress(Math.min(100, Math.round((sec / total) * 100)));
+  }, signal);
 }
 
 async function stitchByReencode(
@@ -357,7 +533,8 @@ async function stitchByReencode(
   output: string,
   mainInfo: ProbeResult,
   appendInfo: ProbeResult,
-  onProgress: (pct: number) => void
+  onProgress: (pct: number) => void,
+  signal?: AbortSignal
 ): Promise<void> {
   const W = mainInfo.width || 1920;
   const H = mainInfo.height || 1080;
@@ -407,5 +584,5 @@ async function stitchByReencode(
   const total = mainInfo.durationSec + appendInfo.durationSec;
   await runFfmpeg(bins.ffmpeg, args, (sec) => {
     if (total > 0) onProgress(10 + Math.min(85, Math.round((sec / total) * 85)));
-  });
+  }, signal);
 }

@@ -2,11 +2,12 @@
  * Registers every `ol:*` invoke handler behind the preload bridge
  * (SPEC section 5).
  */
+import fs from 'node:fs';
 import path from 'node:path';
 import { app, clipboard, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import type { RecordingOptions, Settings, VideoMeta } from '@shared/types';
 import { listCaptureSources } from './capture';
-import { library, revealVideo, fileUrl, setCustomThumbnail } from './library';
+import { library, revealVideo, fileUrl, setCustomThumbnail, regeneratePreviews } from './library';
 import * as recorder from './recorder-ipc';
 import {
   getPermissions,
@@ -26,6 +27,7 @@ import { generateAI, testAI } from './ai';
 import {
   shareVideo,
   unshareVideo,
+  removeRemoteShare,
   updateShareSettings,
   getShareActivity,
   testShareProvider,
@@ -36,6 +38,8 @@ import {
   youtubeConnect,
   youtubeDisconnect,
   youtubePublish,
+  youtubeCancelPublish,
+  youtubeUnpublish,
   youtubeOpenStudioEdit,
 } from './youtube';
 import { log } from './logger';
@@ -83,6 +87,54 @@ function handle(channel: string, fn: (event: IpcMainInvokeEvent, ...args: any[])
   });
 }
 
+/**
+ * Tombstones for shared videos the user force-deleted locally while the remote
+ * copy could not be removed (share host unreachable). Without a record, the
+ * public link outlived every UI that could revoke it. Retried on each launch;
+ * entries that still fail are kept for the next one.
+ */
+interface PendingUnshare {
+  id: string;
+  provider: 'server' | 's3';
+  url: string;
+}
+
+function pendingUnsharePath(): string {
+  return path.join(library().root, 'pending-unshare.json');
+}
+
+function readPendingUnshares(): PendingUnshare[] {
+  try {
+    return JSON.parse(fs.readFileSync(pendingUnsharePath(), 'utf8')) as PendingUnshare[];
+  } catch {
+    return [];
+  }
+}
+
+function writePendingUnshares(entries: PendingUnshare[]): void {
+  if (entries.length === 0) {
+    fs.rmSync(pendingUnsharePath(), { force: true });
+    return;
+  }
+  fs.writeFileSync(pendingUnsharePath(), JSON.stringify(entries, null, 2));
+}
+
+async function retryPendingUnshares(): Promise<void> {
+  const entries = readPendingUnshares();
+  if (entries.length === 0) return;
+  const remaining: PendingUnshare[] = [];
+  for (const entry of entries) {
+    try {
+      await removeRemoteShare(entry.id, entry.provider);
+      log.info(`removed the orphaned shared copy of ${entry.id} (${entry.url})`);
+    } catch (err) {
+      log.warn(`orphaned shared copy of ${entry.id} still could not be removed: ${String(err)}`);
+      remaining.push(entry);
+    }
+  }
+  writePendingUnshares(remaining);
+}
+
 export function registerIpc(): void {
   // -- capture ---------------------------------------------------------------
   ipcMain.on('ol:openLauncher', () => {
@@ -117,17 +169,31 @@ export function registerIpc(): void {
   handle('ol:listVideos', () => library().list());
   handle('ol:getVideo', (_e, id: string) => library().get(id));
   handle('ol:updateVideo', (_e, id: string, patch) => library().update(id, patch));
-  handle('ol:deleteVideo', async (_e, id: string) => {
+  handle('ol:deleteVideo', async (_e, id: string, opts?: { force?: boolean }) => {
     // The delete confirmation promises the shared copy goes too. Local-only
     // deletion left the public link live forever with no UI left to revoke it,
-    // because the recording it hung off no longer existed. Best-effort: a
-    // remote that cannot be reached must not strand the local delete.
-    try {
-      if (library().get(id).share) await unshareVideo(id);
-    } catch (err) {
-      log.warn(`could not remove the shared copy of ${id} before deleting: ${String(err)}`);
+    // because the recording it hung off no longer existed. So a remote that
+    // cannot be reached fails the whole delete, loudly - unless the user
+    // explicitly chose to delete anyway, in which case the orphaned link is
+    // tombstoned and retried on later launches.
+    const meta = library().get(id);
+    if (meta.share) {
+      try {
+        await unshareVideo(id);
+      } catch (err) {
+        if (!opts?.force) {
+          throw new Error(
+            'The shared copy could not be removed, so the video was not deleted - its public link would have stayed live with no way to revoke it. Check the share host and try again.'
+          );
+        }
+        log.warn(`could not remove the shared copy of ${id}; tombstoning it: ${String(err)}`);
+        writePendingUnshares([
+          ...readPendingUnshares(),
+          { id, provider: meta.share.provider, url: meta.share.url },
+        ]);
+      }
     }
-    library().delete(id);
+    await library().delete(id);
   });
   handle('ol:duplicateVideo', (_e, id: string) => library().duplicate(id));
   ipcMain.on('ol:revealVideo', (_e, id: string) => revealVideo(id));
@@ -140,6 +206,7 @@ export function registerIpc(): void {
   });
   handle('ol:searchVideos', (_e, q: string) => library().search(q));
   handle('ol:setCustomThumbnail', (_e, id: string, source) => setCustomThumbnail(id, source));
+  handle('ol:regeneratePreviews', (_e, id: string) => regeneratePreviews(id));
 
   // -- editor ------------------------------------------------------------------
   handle('ol:trimVideo', (_e, id: string, ranges: { start: number; end: number }[]) => trimVideo(id, ranges));
@@ -169,6 +236,8 @@ export function registerIpc(): void {
   handle('ol:youtubeConnect', () => youtubeConnect());
   handle('ol:youtubeDisconnect', () => youtubeDisconnect());
   handle('ol:youtubePublish', (_e, id: string) => youtubePublish(id));
+  handle('ol:youtubeCancelPublish', (_e, id: string) => youtubeCancelPublish(id));
+  handle('ol:youtubeUnpublish', (_e, id: string) => youtubeUnpublish(id));
   ipcMain.on('ol:youtubeOpenStudioEdit', (_e, id: string) => youtubeOpenStudioEdit(id));
 
   // -- settings & system -------------------------------------------------------
@@ -181,6 +250,13 @@ export function registerIpc(): void {
       if (problem) throw new Error(problem);
     }
     assertExecutablePathsPicked(patch, current);
+    // Same consent rule as the executables: saveDir is the root the
+    // openloom-file:// protocol serves from, so a renderer-fabricated value
+    // would widen what a compromised renderer can read. Only a directory the
+    // user picked in the native dialog this session may become the new root.
+    if (patch.saveDir && patch.saveDir !== current.saveDir && !dialogPicked.has(path.resolve(patch.saveDir))) {
+      throw new Error('Choose the save folder with the Change button so it can be verified.');
+    }
     setSettings(patch);
     const masked = getSettingsMasked();
     broadcast('ol:settings-changed', masked);
@@ -191,7 +267,12 @@ export function registerIpc(): void {
     const result = win
       ? await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'] })
       : await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] });
-    return result.canceled ? null : (result.filePaths[0] ?? null);
+    if (result.canceled) return null;
+    const picked = result.filePaths[0] ?? null;
+    // Records the user's consent to this exact directory; the saveDir guard in
+    // ol:setSettings reads it.
+    if (picked) dialogPicked.add(path.resolve(picked));
+    return picked;
   });
   handle('ol:pickFile', async (_e, filter: string) => {
     const filters =
@@ -234,4 +315,8 @@ export function registerIpc(): void {
   handle('ol:listRecoverable', () => recorder.listRecoverable());
   handle('ol:recoverRecording', (_e, tempId: string) => recorder.recoverRecording(tempId));
   handle('ol:discardRecoverable', (_e, tempId: string) => recorder.discardRecoverable(tempId));
+
+  // Orphaned share links from earlier force-deletes: retry removal in the
+  // background once per launch (registerIpc runs at startup).
+  void retryPendingUnshares();
 }

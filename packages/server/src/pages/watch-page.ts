@@ -19,6 +19,8 @@ export interface WatchPageData {
   allowComments: boolean;
   allowReactions: boolean;
   allowDownload: boolean;
+  /** Ask the viewer for their name before the video plays (viewer insights). */
+  requireName: boolean;
   cta: { label: string; url: string } | null;
   chapters: PageChapter[];
   hasCaptions: boolean;
@@ -229,6 +231,24 @@ a:hover { text-decoration: underline; }
 .form-error { color: var(--ol-danger); font-size: 12px; min-height: 16px; }
 .spin { width: 28px; height: 28px; border-radius: 999px; border: 3px solid var(--ol-accent-soft); border-top-color: var(--ol-accent); animation: olspin 0.9s linear infinite; margin: 0 auto; }
 @keyframes olspin { to { transform: rotate(360deg); } }
+
+.name-gate {
+  position: absolute; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center;
+  background: rgba(15, 15, 19, 0.72); padding: 24px;
+}
+.name-gate .gate-card {
+  background: var(--ol-surface); border: 1px solid var(--ol-border); border-radius: var(--ol-radius-card);
+  box-shadow: var(--ol-elev-card); padding: 28px 26px; max-width: 340px; width: 100%; text-align: center;
+}
+.name-gate h2 { font-size: 16px; margin: 10px 0 4px; }
+.name-gate p { color: var(--ol-text-secondary); font-size: 13px; }
+.name-gate form { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
+.name-gate input[type=text] {
+  background: var(--ol-surface-2); border: 1px solid var(--ol-border); border-radius: var(--ol-radius-control);
+  padding: 9px 12px; font-size: 14px; text-align: center;
+}
+.name-gate .go { padding: 9px; border-radius: var(--ol-radius-control); background: var(--ol-accent); color: var(--ol-on-accent); font-weight: 600; }
+.name-gate .go:hover { background: var(--ol-accent-hover); }
 
 body.embed { background: #000; }
 body.embed .video-box video { max-height: none; height: calc(100vh - 49px); }
@@ -534,6 +554,36 @@ const WATCH_JS = String.raw`
   } catch (err) { sessionId = rand(21); }
   var viewId = rand(21);
 
+  // ---- name gate (viewer insights) ----
+  // Soft gate: when the creator turned "ask for a name" on, playback waits
+  // until the viewer says who they are. The name is stored like the comment
+  // form's and rides every beacon, so the Activity tab shows a real name.
+  var gateOpen = false;
+  var gateEl = $('ol-namegate');
+  if (data.requireName && gateEl) {
+    var storedName = '';
+    try { storedName = localStorage.getItem('ol_name') || ''; } catch (err) {}
+    if (!storedName) {
+      gateOpen = true;
+      gateEl.style.display = '';
+      video.addEventListener('play', function () { if (gateOpen) video.pause(); });
+      $('ol-namegate-form').addEventListener('submit', function (e) {
+        e.preventDefault();
+        var gname = $('ol-namegate-input').value.trim();
+        if (!gname) { $('ol-namegate-input').focus(); return; }
+        try { localStorage.setItem('ol_name', gname); } catch (err) {}
+        gateOpen = false;
+        gateEl.remove();
+        var cn = $('ol-cname');
+        if (cn && !cn.value) cn.value = gname;
+        sendBeacon();
+        video.play();
+      });
+    } else {
+      gateEl.remove();
+    }
+  }
+
   // ---- reactions ----
   var mine = [];
   function renderReactions(counts, mineList) {
@@ -718,6 +768,7 @@ export function renderWatchPage(data: WatchPageData): string {
     // The embed variant is chromeless: no comment form or reaction bar exists.
     allowComments: data.allowComments && !data.embed,
     allowReactions: data.allowReactions && !data.embed,
+    requireName: data.requireName,
   }).replace(/</g, '\\u003c');
 
   const reactionsHtml = data.allowReactions
@@ -777,6 +828,20 @@ export function renderWatchPage(data: WatchPageData): string {
     ${data.hasThumb ? '' : '<div class="video-wait" id="ol-wait" aria-hidden="true"><span class="ring"></span></div>'}
     <button type="button" class="big-play" id="ol-bigplay" aria-label="Play"><span class="disc">${ICONS.play}</span></button>
     ${data.embed ? `<span class="embed-title">${escapeHtml(data.title)}</span>` : ''}
+    ${
+      data.requireName
+        ? `<div class="name-gate" id="ol-namegate" style="display:none">
+      <div class="gate-card">
+        <h2>Who is watching?</h2>
+        <p>The creator asked viewers to leave their name before playing.</p>
+        <form id="ol-namegate-form">
+          <input type="text" id="ol-namegate-input" placeholder="Your name" maxlength="80" aria-label="Your name" autocomplete="name">
+          <button type="submit" class="go">Start watching</button>
+        </form>
+      </div>
+    </div>`
+        : ''
+    }
   </div>
   <div class="controls">
     <button type="button" class="ctrl" id="ol-play" aria-label="Play">${ICONS.play}</button>

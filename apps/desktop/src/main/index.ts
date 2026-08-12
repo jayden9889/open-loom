@@ -4,7 +4,7 @@
  * shortcuts, tray after ready. Closing the main window keeps the app alive
  * in the tray (SPEC R12).
  */
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, dialog } from 'electron';
 import { registerScheme, installProtocolHandler } from './protocol';
 import { installDisplayMediaHandler, installPermissionHandlers } from './capture';
 import { registerIpc } from './ipc';
@@ -16,6 +16,11 @@ import { installShortcuts, unregisterAllShortcuts } from './shortcuts';
 import { installTray } from './tray';
 import { installClickHighlights, shutdownClickHighlights } from './clicks';
 import { installUpdater } from './updater';
+import {
+  recoverPendingYouTubeUploads,
+  youtubeCancelAllPublishes,
+  youtubeUploadsInFlight,
+} from './youtube';
 import { getPermissions } from './permissions';
 import { log } from './logger';
 import { runTestHooks } from './test-hooks';
@@ -53,6 +58,12 @@ if (!gotLock) {
     // the first recording never hits an install wall.
     void ensureFfmpeg('launch').catch((err) => log.warn(`ffmpeg prefetch failed: ${String(err)}`));
     installUpdater();
+    // Pick up YouTube uploads that were mid-flight when the app last quit:
+    // finished ones get their video id recovered, unfinished ones keep their
+    // session so the Watch view can offer "Resume upload".
+    void recoverPendingYouTubeUploads().catch((err) =>
+      log.warn(`youtube upload recovery failed: ${String(err)}`)
+    );
     log.info(`Open Loom ready (v${app.getVersion()}, ${process.platform} ${process.getSystemVersion?.() ?? ''})`);
     // One line of TCC truth per launch: "the tick is on but the app says no"
     // is invisible in the UI and has cost real debugging time. See #resetScreenPermission.
@@ -71,6 +82,32 @@ if (!gotLock) {
     if (BrowserWindow.getAllWindows().length === 0) {
       createMainWindow();
       if (getSettings().setupComplete && !isRecordingActive()) showLauncher();
+    }
+  });
+
+  // Quitting mid-upload silently threw the upload away. Ask first; a confirmed
+  // quit aborts the uploads cleanly (which also releases Google's sessions).
+  let quitWithUploadsApproved = false;
+  app.on('before-quit', (event) => {
+    if (quitWithUploadsApproved) return;
+    const count = youtubeUploadsInFlight();
+    if (count === 0) return;
+    event.preventDefault();
+    const choice = dialog.showMessageBoxSync({
+      type: 'question',
+      buttons: ['Keep uploading', 'Quit and cancel upload'],
+      defaultId: 0,
+      cancelId: 0,
+      message:
+        count === 1
+          ? 'A YouTube upload is still running.'
+          : `${count} YouTube uploads are still running.`,
+      detail: 'Quitting now cancels it, and the video will not appear on your channel.',
+    });
+    if (choice === 1) {
+      quitWithUploadsApproved = true;
+      youtubeCancelAllPublishes();
+      app.quit();
     }
   });
 

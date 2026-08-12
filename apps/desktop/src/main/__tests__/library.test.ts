@@ -143,29 +143,29 @@ describe('folders', () => {
 });
 
 describe('search', () => {
-  it('matches titles case-insensitively', () => {
+  it('matches titles case-insensitively', async () => {
     seedVideo('aaa', { title: 'Quarterly Update' });
     seedVideo('bbb', { title: 'Bug walkthrough' });
-    const hits = store.search('quarterly');
+    const hits = await store.search('quarterly');
     expect(hits).toHaveLength(1);
     expect(hits[0]!.id).toBe('aaa');
     expect(hits[0]!.matches[0]).toBe('Quarterly Update');
   });
 
-  it('searches transcript.json segments when present', () => {
+  it('searches transcript.json segments when present', async () => {
     seedVideo('aaa', { title: 'Untitled' });
     fs.writeFileSync(
       path.join(dir, 'aaa', 'transcript.json'),
       JSON.stringify({ segments: [{ start: 0, end: 2, text: 'welcome to the demo of folders' }] })
     );
-    const hits = store.search('demo of folders');
+    const hits = await store.search('demo of folders');
     expect(hits).toHaveLength(1);
     expect(hits[0]!.matches[0]).toContain('welcome to the demo');
   });
 
-  it('returns nothing for a blank query', () => {
+  it('returns nothing for a blank query', async () => {
     seedVideo('aaa');
-    expect(store.search('   ')).toEqual([]);
+    expect(await store.search('   ')).toEqual([]);
   });
 });
 

@@ -149,6 +149,7 @@ export function WatchView({
   /** 0..99 while the upload runs, null when idle (progress arrives on the job channel). */
   const [youtubePct, setYoutubePct] = useState<number | null>(null);
   const [youtubeError, setYoutubeError] = useState<string | null>(null);
+  const [youtubeRemoving, setYoutubeRemoving] = useState(false);
 
   // A recording that just landed opens straight into the publish flow: the
   // YouTube panel arrives expanded so getting the link is one click, not two.
@@ -209,8 +210,9 @@ export function WatchView({
       }
       // The YouTube upload owns its own bar inside the publish panel, so it does
       // not go through runningJob (which the editor/transcribe strip renders).
+      // `failed` marks a terminal failure/cancel, which no longer reports pct 100.
       if (j.kind === 'youtube') {
-        setYoutubePct(j.pct >= 100 ? null : j.pct);
+        setYoutubePct(j.failed || j.pct >= 100 ? null : j.pct);
         return;
       }
       if (!['transcribe', 'ai', 'trim', 'stitch', 'revert'].includes(j.kind)) return;
@@ -256,6 +258,13 @@ export function WatchView({
   // and hand back the watch link. An unaudited API project lands the video as
   // private (privacy === 'private'); the panel then offers the one-click flip.
   const startYouTubePublish = () => {
+    // Republishing is a real second upload, not an update: say so before it runs.
+    if (meta?.youtubeUrl) {
+      const ok = window.confirm(
+        `"${meta.title}" is already on YouTube. Publishing again uploads a second copy and replaces the saved link - the video already on your channel stays there unless you remove it first. Continue?`
+      );
+      if (!ok) return;
+    }
     setTab('details');
     setYoutubeOpen(true);
     setYoutubeError(null);
@@ -276,6 +285,37 @@ export function WatchView({
       (err) => {
         setYoutubePublishing(false);
         setYoutubePct(null);
+        const msg = cleanIpcError(err);
+        // A cancel is the user's own action, not something that went wrong.
+        if (/cancelled/i.test(msg)) push('info', 'Upload cancelled.');
+        else setYoutubeError(msg);
+      }
+    );
+  };
+
+  const cancelYouTubeUpload = () => {
+    // The publish promise above rejects with 'Upload cancelled.' and shows the toast.
+    void window.openloom.youtubeCancelPublish(id).catch(() => undefined);
+  };
+
+  // "Remove from YouTube": videos.delete on the channel, then clear the link.
+  const removeFromYouTube = () => {
+    if (!meta?.youtubeUrl) return;
+    const ok = window.confirm(
+      `Remove "${meta.title}" from YouTube? Anyone with the link will no longer be able to watch it.`
+    );
+    if (!ok) return;
+    setYoutubeError(null);
+    setYoutubeRemoving(true);
+    void window.openloom.youtubeUnpublish(id).then(
+      () => {
+        setYoutubeRemoving(false);
+        push('success', 'Removed from YouTube.');
+        void window.openloom.getVideo(id).then(setMeta, () => undefined);
+        void onChanged();
+      },
+      (err) => {
+        setYoutubeRemoving(false);
         setYoutubeError(cleanIpcError(err));
       }
     );
@@ -483,11 +523,16 @@ export function WatchView({
           <button
             type="button"
             className="btn-primary"
+            disabled={youtubePublishing}
             onClick={startYouTubePublish}
-            title="Publish this recording to YouTube as unlisted"
+            title={
+              meta.youtubeUrl
+                ? 'Upload this recording to YouTube again (a second copy)'
+                : 'Publish this recording to YouTube as unlisted'
+            }
           >
             <Icon.Play width={15} height={15} />
-            Publish to YouTube
+            {meta.youtubeUrl ? 'Republish to YouTube' : 'Publish to YouTube'}
           </button>
           <button
             type="button"
@@ -841,7 +886,28 @@ export function WatchView({
                     <h4>Publish to YouTube</h4>
                   </div>
 
-                  {meta.youtubeUrl ? (
+                  {youtubePublishing ? (
+                    // Checked first so a republish shows its progress instead of
+                    // sitting silently behind the previous upload's link.
+                    <>
+                      <div className="side-progress" role="status">
+                        <span className="spinner" aria-hidden="true" />
+                        <span>
+                          {youtubePct === null
+                            ? 'Starting the upload…'
+                            : youtubePct >= 99
+                              ? 'Uploaded. YouTube is processing it…'
+                              : `Uploading to YouTube… ${youtubePct}%`}
+                        </span>
+                        <div className="job-bar">
+                          <div className="job-bar-fill" style={{ width: `${youtubePct ?? 0}%` }} />
+                        </div>
+                      </div>
+                      <button type="button" className="btn-secondary" onClick={cancelYouTubeUpload}>
+                        Cancel upload
+                      </button>
+                    </>
+                  ) : meta.youtubeUrl ? (
                     <>
                       <p className="side-note">
                         {meta.youtubePrivacy === 'unlisted'
@@ -870,27 +936,28 @@ export function WatchView({
                           <Icon.Link width={15} height={15} />
                           Copy YouTube link
                         </button>
-                        {meta.youtubePrivacy === 'private' && (
+                        {meta.youtubePrivacy === 'private' ? (
                           <button type="button" className="btn-primary" onClick={openStudioFlip}>
                             Set to Unlisted
                           </button>
+                        ) : (
+                          // The Studio page is also the manual fallback when the
+                          // in-app remove fails, so it is always reachable.
+                          <button type="button" className="btn-secondary" onClick={openStudioFlip}>
+                            Open in YouTube Studio
+                          </button>
                         )}
+                        <button
+                          type="button"
+                          className="btn-danger-quiet"
+                          disabled={youtubeRemoving}
+                          onClick={removeFromYouTube}
+                        >
+                          <Icon.Trash width={15} height={15} />
+                          {youtubeRemoving ? 'Removing…' : 'Remove from YouTube'}
+                        </button>
                       </div>
                     </>
-                  ) : youtubePublishing ? (
-                    <div className="side-progress" role="status">
-                      <span className="spinner" aria-hidden="true" />
-                      <span>
-                        {youtubePct === null
-                          ? 'Starting the upload…'
-                          : youtubePct >= 99
-                            ? 'Uploaded. YouTube is processing it…'
-                            : `Uploading to YouTube… ${youtubePct}%`}
-                      </span>
-                      <div className="job-bar">
-                        <div className="job-bar-fill" style={{ width: `${youtubePct ?? 0}%` }} />
-                      </div>
-                    </div>
                   ) : youtubeConnected === false ? (
                     <>
                       <p className="side-note">
@@ -899,27 +966,26 @@ export function WatchView({
                       <button type="button" className="btn-primary" onClick={onOpenYouTubeSettings}>
                         Connect YouTube in Settings
                       </button>
-                      {youtubeError && (
-                        <p className="youtube-error" role="alert">
-                          {youtubeError}
-                        </p>
-                      )}
                     </>
                   ) : (
                     <>
                       <p className="side-note">
-                        Uploads to your channel as unlisted and hands back the link.
+                        {meta.youtubeUpload
+                          ? 'An earlier upload of this recording did not finish. Resuming continues where it stopped.'
+                          : 'Uploads to your channel as unlisted and hands back the link.'}
                       </p>
                       <button type="button" className="btn-primary" onClick={startYouTubePublish}>
                         <Icon.Play width={15} height={15} />
-                        Publish to YouTube
+                        {meta.youtubeUpload ? 'Resume upload' : 'Publish to YouTube'}
                       </button>
-                      {youtubeError && (
-                        <p className="youtube-error" role="alert">
-                          {youtubeError}
-                        </p>
-                      )}
                     </>
+                  )}
+                  {youtubeError && (
+                    // Rendered outside the branches so a failure is visible in
+                    // every state - a failed republish used to show nothing.
+                    <p className="youtube-error" role="alert">
+                      {youtubeError}
+                    </p>
                   )}
                 </div>
               )}

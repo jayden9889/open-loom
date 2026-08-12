@@ -63,19 +63,37 @@ export function studioEditUrl(id: string): string {
   return `https://studio.youtube.com/video/${id}/edit`;
 }
 
+/** videos.delete endpoint for an upload ("Remove from YouTube"; needs youtube.force-ssl). */
+export function videosDeleteUrl(id: string): string {
+  return `https://www.googleapis.com/youtube/v3/videos?id=${encodeURIComponent(id)}`;
+}
+
 // ---------------------------------------------------------------------------
 // OAuth 2.0 loopback (RFC 8252) - pure request builders
 // ---------------------------------------------------------------------------
 
 export const YT_AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
 export const YT_TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
+/** Where a refresh token is revoked when the user disconnects (POST token=<rt>, form-encoded). */
+export const YT_REVOKE_ENDPOINT = 'https://oauth2.googleapis.com/revoke';
 /**
- * Upload + set metadata (incl. privacyStatus) on the user's own channel, plus
+ * Full write access to the user's own channel (youtube.force-ssl: upload, set
+ * metadata incl. privacyStatus, AND videos.delete - "Remove from YouTube" needs
+ * delete, which the narrower youtube.upload scope does not grant), plus
  * readonly so connect can resolve which channel the token actually reaches
- * (channels.list rejects the upload scope alone). Space-separated per OAuth 2.0.
+ * (channels.list rejects the write scope alone). Space-separated per OAuth 2.0.
+ * Widening this set means bumping YT_SCOPE_VERSION below.
  */
 export const YT_SCOPE =
-  'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly';
+  'https://www.googleapis.com/auth/youtube.force-ssl https://www.googleapis.com/auth/youtube.readonly';
+
+/**
+ * Generation counter for YT_SCOPE. Settings stores the version a refresh token
+ * was consented under, so tokens minted before a scope widening can be told
+ * apart and prompted to reconnect (Google will not widen an existing grant).
+ * v2: youtube.upload replaced by youtube.force-ssl to allow removing videos.
+ */
+export const YT_SCOPE_VERSION = 2;
 
 /** The connected account's own channel - used at connect time to catch wrong-account sign-ins. */
 export const YT_CHANNELS_ENDPOINT =
@@ -182,6 +200,47 @@ export function contentRange(start: number, endInclusive: number, total: number)
 /** `Content-Range` for the empty PUT that asks how many bytes the server holds. */
 export function queryRange(total: number): string {
   return `bytes */${total}`;
+}
+
+/**
+ * True for the shapes YouTube uses for "you have hit the daily cap": the 403
+ * quotaExceeded family, and the 400 uploadLimitExceeded the videos endpoint
+ * returns for the per-channel daily upload limit. Both mean the same thing to
+ * the user - come back tomorrow - so they share one message.
+ */
+export function isQuotaError(status: number, detail: string): boolean {
+  if (status === 403 && /quota/i.test(detail)) return true;
+  if (status === 400 && /uploadLimitExceeded|uploadLimit/i.test(detail)) return true;
+  return false;
+}
+
+/** Google keeps an unfinished resumable session for a week; after that it is gone. */
+export const SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** The in-flight session marker persisted to a video's metadata (VideoMeta.youtubeUpload). */
+export interface PendingUpload {
+  sessionUri: string;
+  total: number;
+  startedAt: string;
+}
+
+/**
+ * Whether a persisted upload session is still worth resuming: same byte count
+ * as the file on disk (the declared length is committed at session start, so an
+ * edited file voids the session) and younger than Google's 7-day session
+ * lifetime. `now` is injectable for tests.
+ */
+export function isSessionReusable(
+  pending: PendingUpload | undefined,
+  fileTotal: number,
+  now: number = Date.now()
+): boolean {
+  if (!pending || !pending.sessionUri) return false;
+  if (pending.total !== fileTotal) return false;
+  const started = Date.parse(pending.startedAt);
+  if (!Number.isFinite(started)) return false;
+  const age = now - started;
+  return age >= 0 && age < SESSION_MAX_AGE_MS;
 }
 
 /**
