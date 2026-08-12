@@ -24,6 +24,13 @@ interface Seg {
 
 const MIN_SEG = 0.1;
 
+/**
+ * Mirrors WAVEFORM_VERSION in the main process. Waveforms written before this
+ * used peak-max on a linear scale, which drew transients rather than speech, so
+ * anything older is rebuilt on open.
+ */
+const CURRENT_WAVEFORM_VERSION = 2;
+
 function mergeKept(segs: Seg[]): { start: number; end: number }[] {
   const out: { start: number; end: number }[] = [];
   for (const s of segs) {
@@ -186,14 +193,29 @@ export function EditorView({
   // Waveform peaks (reuses the processing-time waveform.json).
   useEffect(() => {
     let cancelled = false;
-    void fetch(`${window.openloom.fileUrl(id, 'waveform.json')}?v=${fileVersion}`)
-      .then(async (res) => (res.ok ? ((await res.json()) as { peaks?: number[] }) : null))
-      .then((data) => {
-        if (!cancelled) setPeaks(data?.peaks ?? []);
-      })
-      .catch(() => {
-        if (!cancelled) setPeaks([]);
-      });
+    // Recordings made before the waveform was reworked carry no version and a
+    // peak-max envelope, which renders as spiky bars next to the smooth one.
+    // Rather than leave the old library looking broken, redraw what we have and
+    // rebuild it in the background, then show the result.
+    const load = async (): Promise<void> => {
+      const url = `${window.openloom.fileUrl(id, 'waveform.json')}?v=${fileVersion}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('no waveform');
+      const data = (await res.json()) as { peaks?: number[]; version?: number };
+      if (cancelled) return;
+      setPeaks(data.peaks ?? []);
+      if ((data.version ?? 1) >= CURRENT_WAVEFORM_VERSION) return;
+
+      await window.openloom.regeneratePreviews(id);
+      if (cancelled) return;
+      const fresh = await fetch(`${url}&w=${Date.now()}`);
+      if (!fresh.ok || cancelled) return;
+      const next = (await fresh.json()) as { peaks?: number[] };
+      if (!cancelled) setPeaks(next.peaks ?? []);
+    };
+    void load().catch(() => {
+      if (!cancelled) setPeaks([]);
+    });
     return () => {
       cancelled = true;
     };
@@ -269,14 +291,48 @@ export function EditorView({
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       if (peaks.length === 0) return;
       const style = getComputedStyle(document.documentElement);
-      ctx.fillStyle = style.getPropertyValue('--ol-accent').trim() || '#635BFF';
-      ctx.globalAlpha = 0.55;
+      const accent = style.getPropertyValue('--ol-accent').trim() || '#635BFF';
       const mid = canvas.height / 2;
-      const barW = canvas.width / peaks.length;
-      for (let i = 0; i < peaks.length; i++) {
-        const h = Math.max(1, peaks[i]! * (canvas.height * 0.92));
-        ctx.fillRect(i * barW, mid - h / 2, Math.max(1, barW * 0.8), h);
-      }
+      const maxH = canvas.height * 0.92;
+
+      // A filled envelope mirrored about the centre line, not a bar per bucket.
+      // Bars read as a chart of transients; a continuous shape reads as a voice.
+      // The path is built along the top edge and back along the bottom, with a
+      // quadratic through the midpoint of each pair of samples so the outline
+      // stays smooth however many buckets the recording produced.
+      const x = (i: number) => (i / (peaks.length - 1 || 1)) * canvas.width;
+      const top = (i: number) => mid - Math.max(0.5, peaks[i]! * maxH) / 2;
+      const bottom = (i: number) => mid + Math.max(0.5, peaks[i]! * maxH) / 2;
+
+      const trace = (edge: (i: number) => number, forward: boolean) => {
+        const idx = forward
+          ? peaks.map((_, i) => i)
+          : peaks.map((_, i) => peaks.length - 1 - i);
+        for (let k = 0; k < idx.length - 1; k++) {
+          const i = idx[k]!;
+          const next = idx[k + 1]!;
+          const midX = (x(i) + x(next)) / 2;
+          const midY = (edge(i) + edge(next)) / 2;
+          ctx.quadraticCurveTo(x(i), edge(i), midX, midY);
+        }
+        const last = idx[idx.length - 1]!;
+        ctx.lineTo(x(last), edge(last));
+      };
+
+      ctx.beginPath();
+      ctx.moveTo(x(0), top(0));
+      trace(top, true);
+      trace(bottom, false);
+      ctx.closePath();
+      ctx.fillStyle = accent;
+      ctx.globalAlpha = 0.5;
+      ctx.fill();
+      // A crisper outline keeps quiet passages legible, where the fill is thin.
+      ctx.globalAlpha = 0.85;
+      ctx.lineWidth = Math.max(1, dpr);
+      ctx.strokeStyle = accent;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
     };
     paint();
     const obs = new ResizeObserver(paint);

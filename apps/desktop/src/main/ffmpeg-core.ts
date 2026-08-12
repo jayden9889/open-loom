@@ -274,24 +274,91 @@ export async function gifPreview(bins: FfmpegBinaries, input: string, output: st
 }
 
 export interface WaveformData {
+  /** Smoothed loudness envelope, 0..1 per bucket. See WAVEFORM_VERSION. */
   peaks: number[];
   durationSec: number;
+  /** Absent on files written before versioning; treated as version 1. */
+  version?: number;
 }
 
 /**
  * Extract mono 8kHz PCM and reduce to `buckets` normalised peaks (0..1).
  * Videos without an audio stream get an empty peaks array.
  */
+/**
+ * Current waveform payload version. Bump this whenever the maths below changes
+ * in a way that makes an old `waveform.json` look wrong next to a new one, so
+ * existing recordings regenerate instead of keeping stale-looking data.
+ *
+ * v2: RMS + decibel scaling + duration-scaled buckets + smoothing (was: raw
+ * peak-max of linear amplitude in a fixed 800 buckets, which rendered one
+ * plosive or chair creak as a full-height spike and left ordinary speech flat).
+ */
+export const WAVEFORM_VERSION = 2;
+
+/** Anything at or below this many dBFS reads as silence. */
+const WAVEFORM_FLOOR_DB = -60;
+/** Roughly this many buckets per second of audio. */
+const BUCKETS_PER_SEC = 12;
+const MIN_BUCKETS = 240;
+const MAX_BUCKETS = 6000;
+
+/**
+ * How many buckets to cut a recording into. Fixed bucket counts make long
+ * recordings blocky (a 60 minute take got the same detail as a 30 second one),
+ * so this scales with duration and then clamps at both ends.
+ */
+export function waveformBucketCount(durationSec: number): number {
+  const wanted = Math.round(Math.max(0, durationSec) * BUCKETS_PER_SEC);
+  return Math.min(MAX_BUCKETS, Math.max(MIN_BUCKETS, wanted || MIN_BUCKETS));
+}
+
+/**
+ * Map a linear RMS amplitude (0..1) onto a 0..1 display height through a
+ * decibel scale. Loudness is perceived roughly logarithmically, so plotting
+ * raw amplitude leaves speech hugging the baseline while one hard consonant
+ * towers over it. In dB, ordinary speech uses most of the height, which is
+ * what makes the bar look like it follows the voice.
+ */
+export function amplitudeToDisplay(rms: number): number {
+  if (rms <= 0) return 0;
+  const db = 20 * Math.log10(rms);
+  if (db <= WAVEFORM_FLOOR_DB) return 0;
+  // Floor maps to 0, full scale (0 dBFS) maps to 1.
+  return Math.min(1, (db - WAVEFORM_FLOOR_DB) / -WAVEFORM_FLOOR_DB);
+}
+
+/**
+ * Short moving average over the envelope. Speech energy is naturally spiky at
+ * bucket resolution; without this the bar reads as a bar chart of transients
+ * rather than a flowing line. The window is deliberately small so the envelope
+ * still lines up with the audio under the playhead.
+ */
+export function smoothEnvelope(values: number[], window = 3): number[] {
+  if (values.length === 0 || window < 2) return values;
+  const half = Math.floor(window / 2);
+  return values.map((_, i) => {
+    let sum = 0;
+    let count = 0;
+    for (let j = i - half; j <= i + half; j++) {
+      if (j < 0 || j >= values.length) continue;
+      sum += values[j]!;
+      count++;
+    }
+    return count === 0 ? 0 : Math.round((sum / count) * 1000) / 1000;
+  });
+}
+
 export async function waveformPeaks(
   bins: FfmpegBinaries,
   input: string,
   outputJson: string,
-  buckets = 800
+  buckets?: number
 ): Promise<WaveformData> {
   const info = await probe(bins, input);
   let data: WaveformData;
   if (!info.audioCodec) {
-    data = { peaks: [], durationSec: info.durationSec };
+    data = { peaks: [], durationSec: info.durationSec, version: WAVEFORM_VERSION };
   } else {
     const pcm = await run(
       bins.ffmpeg,
@@ -299,17 +366,27 @@ export async function waveformPeaks(
       { collectStdout: true }
     );
     const samples = pcm.length >> 1;
-    const n = Math.min(buckets, Math.max(1, samples));
-    const peaks = new Array<number>(n).fill(0);
+    const durationSec = info.durationSec || samples / 8000;
+    const n = Math.min(buckets ?? waveformBucketCount(durationSec), Math.max(1, samples));
+    // Sum of squares per bucket, so each bucket reports the energy of that slice
+    // rather than its single loudest sample. Peak-max was the whole reason the
+    // old bar looked jolty: one transient defined an entire bucket.
+    const sums = new Array<number>(n).fill(0);
+    const counts = new Array<number>(n).fill(0);
     const perBucket = Math.max(1, Math.floor(samples / n));
     for (let i = 0; i < samples; i++) {
-      const v = Math.abs(pcm.readInt16LE(i * 2)) / 32768;
+      const v = pcm.readInt16LE(i * 2) / 32768;
       const b = Math.min(n - 1, Math.floor(i / perBucket));
-      if (v > peaks[b]!) peaks[b] = v;
+      sums[b]! += v * v;
+      counts[b]!++;
     }
+    const envelope = sums.map((sum, i) =>
+      amplitudeToDisplay(counts[i] === 0 ? 0 : Math.sqrt(sum / counts[i]!))
+    );
     data = {
-      peaks: peaks.map((p) => Math.round(p * 1000) / 1000),
-      durationSec: info.durationSec || samples / 8000,
+      peaks: smoothEnvelope(envelope),
+      durationSec,
+      version: WAVEFORM_VERSION,
     };
   }
   fs.mkdirSync(path.dirname(outputJson), { recursive: true });

@@ -653,6 +653,8 @@ export interface OpenLoomAPI {
    */
   deleteVideo(id: string, opts?: { force?: boolean }): Promise<void>;
   duplicateVideo(id: string): Promise<VideoMeta>;
+  /** Rebuild thumb.jpg / preview.gif / waveform.json for an existing recording. */
+  regeneratePreviews(id: string): Promise<void>;
   revealVideo(id: string): void;
   fileUrl(id: string, file: string): string;
   listFolders(): Promise<Folder[]>;

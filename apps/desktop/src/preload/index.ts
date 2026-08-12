@@ -61,6 +61,7 @@ const api: OpenLoomAPI = {
   deleteVideo: (id: string) => ipcRenderer.invoke('ol:deleteVideo', id),
   duplicateVideo: (id: string) => ipcRenderer.invoke('ol:duplicateVideo', id),
   revealVideo: (id: string) => ipcRenderer.send('ol:revealVideo', id),
+  regeneratePreviews: (id: string) => ipcRenderer.invoke('ol:regeneratePreviews', id),
   fileUrl: (id: string, file: string) =>
     `openloom-file://${encodeURIComponent(id)}/${encodeURIComponent(file)}`,
   listFolders: () => ipcRenderer.invoke('ol:listFolders'),
