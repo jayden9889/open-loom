@@ -61,6 +61,20 @@ textarea {
 .boot {
   height: 100%;
   background: var(--ol-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* A wait is never a blank rectangle: thin indeterminate ring (DESIGN.md). */
+.boot::after {
+  content: '';
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--ol-border-strong);
+  border-top-color: var(--ol-accent);
+  animation: spin 0.9s linear infinite;
 }
 
 /* ---------------------------------------------------------------- buttons */
@@ -101,9 +115,13 @@ textarea {
   background: var(--ol-hover);
 }
 
+.btn-secondary:active:not(:disabled) {
+  background: var(--ol-active);
+}
+
 .btn-danger {
   background: var(--ol-danger);
-  color: #fff;
+  color: var(--ol-on-accent);
 }
 
 .btn-danger:hover:not(:disabled) {
@@ -146,8 +164,8 @@ textarea {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   border: none;
   background: transparent;
   border-radius: var(--ol-radius-control);
@@ -160,6 +178,10 @@ textarea {
 .icon-btn:hover {
   background: var(--ol-hover);
   color: var(--ol-text);
+}
+
+.icon-btn:active {
+  background: var(--ol-active);
 }
 
 .btn-row {
@@ -234,6 +256,10 @@ textarea {
 
 .side-item:hover {
   background: var(--ol-hover);
+}
+
+.side-item:active {
+  background: var(--ol-active);
 }
 
 .side-item.selected {
@@ -578,7 +604,6 @@ textarea {
 }
 
 .video-sub .video-more {
-  margin-left: auto;
   opacity: 0;
   transition: opacity var(--ol-dur-fast) var(--ol-ease);
 }
@@ -586,6 +611,48 @@ textarea {
 .video-card:hover .video-more,
 .video-more:focus-visible {
   opacity: 1;
+}
+
+/* Trim on the card: the one edit a first-timer actually needs, so it gets a
+   labelled control instead of hiding behind the More menu. */
+.video-sub .video-trim {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--ol-border);
+  background: transparent;
+  color: var(--ol-text-secondary);
+  border-radius: var(--ol-radius-pill);
+  padding: 2px 9px;
+  font-size: var(--ol-text-xs);
+  font-weight: 600;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--ol-dur-fast) var(--ol-ease), background var(--ol-dur-fast) var(--ol-ease),
+    border-color var(--ol-dur-fast) var(--ol-ease);
+}
+
+.video-card:hover .video-trim,
+.video-trim:focus-visible {
+  opacity: 1;
+}
+
+.video-trim:hover {
+  background: var(--ol-hover);
+  border-color: var(--ol-border-strong);
+  color: var(--ol-text);
+}
+
+/* A missing thumbnail still gets a designed tile, never a blank rectangle. */
+.video-thumb-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ol-text-tertiary);
+  background: var(--ol-surface-2);
 }
 
 .badge {
@@ -774,7 +841,7 @@ textarea {
 
 .menu-item.danger:hover:not(:disabled) {
   background: var(--ol-danger);
-  color: #fff;
+  color: var(--ol-on-accent);
 }
 
 .menu-icon {
@@ -923,7 +990,7 @@ textarea {
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  background: #fff;
+  background: var(--ol-on-accent);
   transition: transform var(--ol-dur) var(--ol-ease);
 }
 
@@ -1057,7 +1124,7 @@ textarea {
 }
 
 .source-blocked-note {
-  color: var(--ol-text-dim);
+  color: var(--ol-text-tertiary);
 }
 
 .source-card {
@@ -1305,9 +1372,53 @@ textarea {
   color: var(--ol-danger);
 }
 
+/* A one-time download is a to-do, not a failure: accent, never alarm red. */
+.pill-todo {
+  background: var(--ol-accent-soft);
+  color: var(--ol-accent);
+}
+
 .pill-pending {
   background: var(--ol-hover);
   color: var(--ol-text-secondary);
+}
+
+/* Install progress: a quiet ring plus plain words by default; the raw command
+   output sits behind a "Show details" disclosure for the technically curious. */
+.setup-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.setup-progress-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--ol-text-sm);
+  color: var(--ol-text-secondary);
+}
+
+.setup-details summary {
+  font-size: var(--ol-text-sm);
+  color: var(--ol-text-secondary);
+  cursor: pointer;
+  width: fit-content;
+  border-radius: var(--ol-radius-control);
+  padding: 2px 4px;
+}
+
+.setup-details summary:hover {
+  color: var(--ol-text);
+}
+
+.setup-details summary:focus-visible {
+  outline: none;
+  box-shadow: var(--ol-focus-ring);
+}
+
+.setup-details[open] summary {
+  margin-bottom: 6px;
 }
 
 .setup-log {
@@ -2627,6 +2738,29 @@ textarea {
   margin: 0;
   font-size: var(--ol-text-sm);
   color: var(--ol-danger);
+}
+
+/* ---------------------------------------------------------------- keyboard focus */
+
+/* Every interactive component ships a focus state (DESIGN.md) - these had
+   hover but nothing for the keyboard, which matters most on the menu's
+   Delete row and the source picker. */
+.tab:focus-visible,
+.ctrl-btn:focus-visible,
+.menu-item:focus-visible,
+.settings-nav-item:focus-visible,
+.video-title:focus-visible,
+.video-trim:focus-visible,
+.watch-title:focus-visible {
+  outline: none;
+  box-shadow: var(--ol-focus-ring);
+}
+
+/* The source card already carries a 2px border - recolour it rather than
+   stacking a ring on top. */
+.source-card:focus-visible {
+  outline: none;
+  border-color: var(--ol-accent);
 }
 
 /* ---------------------------------------------------------------- reduced motion */

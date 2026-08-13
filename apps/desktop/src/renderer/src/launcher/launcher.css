@@ -22,6 +22,9 @@ body.launcher-body {
   border: 1px solid rgba(255, 255, 255, 0.22);
   border-radius: var(--ol-radius-card);
   overflow: hidden;
+  /* The recipe's soft ambient shadow is the window's native macOS shadow
+     (hasShadow in windows.ts) - the panel fills its window edge to edge, so a
+     CSS box-shadow here would clip. Do not re-add one. */
 }
 
 .launcher-drag {
@@ -36,7 +39,7 @@ body.launcher-body {
 .launcher-title {
   font-size: 12px;
   font-weight: 600;
-  color: var(--ol-text-dim);
+  color: var(--ol-text-tertiary);
   letter-spacing: 0.02em;
 }
 
@@ -100,8 +103,10 @@ body.launcher-body {
   text-align: center;
   padding: 12px;
   font-size: 12px;
-  color: var(--ol-text-dim);
-  background: var(--ol-surface);
+  color: var(--ol-text-secondary);
+  /* Overlay surface family: glass-native fill, not the in-app surface token,
+     so the panel cannot sprout a white card if the dark theme lock ever goes. */
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .launcher-devices {
@@ -154,6 +159,18 @@ body.launcher-body {
   flex-shrink: 0;
 }
 
+/* Overlay surface family (DESIGN.md): the app grid's cards are in-app
+   surfaces; inside the glass panel they get explicit glass-native fills
+   rather than leaning on the launcher's dark theme lock. */
+.launcher .source-card {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.launcher .source-card img,
+.launcher .source-thumb-empty {
+  background: rgba(255, 255, 255, 0.04);
+}
+
 /* Full screen: the primary choice - one wide card ahead of the window grid. */
 .launcher-sources .source-grid-displays {
   grid-template-columns: 1fr;
@@ -185,7 +202,7 @@ body.launcher-body {
   flex: 1;
   margin: 0;
   font-size: 12px;
-  color: var(--ol-text-dim);
+  color: var(--ol-text-tertiary);
 }
 
 .launcher-foot {
@@ -217,5 +234,37 @@ body.launcher-body {
   margin: 0;
   text-align: center;
   font-size: 11px;
-  color: var(--ol-text-dim);
+  color: var(--ol-text-tertiary);
+}
+
+/* Talking notes: typed here, shown in the capture-excluded overlay during the
+   take. Glass-native field per the overlay surface family. */
+.launcher-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 0 14px 10px;
+  flex-shrink: 0;
+}
+
+.launcher-notes textarea {
+  resize: none;
+  min-height: 44px;
+  padding: 7px 9px;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--ol-text, #f5f5f7);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.launcher-notes textarea::placeholder {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.launcher-notes textarea:focus-visible {
+  outline: 2px solid var(--ol-accent);
+  outline-offset: 1px;
 }

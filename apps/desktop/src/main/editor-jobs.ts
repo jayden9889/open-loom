@@ -20,6 +20,7 @@ import { trimVideoFile, stitchVideoFiles, type KeepRange } from './editor-core';
 import { generatePreviews } from './preview-core';
 import { library } from './library';
 import { getSettings, setSettings } from './settings';
+import { markShareStale } from './share';
 import { buildVtt, retimeSegments, retimeThroughRanges } from './transcribe-core';
 import { log } from './logger';
 
@@ -196,6 +197,9 @@ export async function trimVideo(id: string, ranges: KeepRange[]): Promise<void> 
       );
       fs.renameSync(tmpOut, input);
       recordEdit(id, 'trim');
+      // The local file no longer matches the hosted copy; Watch shows the
+      // "your edits are not on the shared link yet" state off this.
+      markShareStale(id);
       log.info(`trim of ${id} saved via ${result.method} (${result.durationSec}s)`);
       await refreshDerivedAssets(id, report, ranges);
       report(100, result.method === 'copy' ? 'Saved with a lossless cut' : 'Saved with a precise re-encode');
@@ -232,6 +236,7 @@ export async function stitchVideos(id: string, appendId: string, appendRange?: K
       );
       fs.renameSync(tmpOut, input);
       recordEdit(id, 'stitch');
+      markShareStale(id);
       log.info(`stitch ${appendId} onto ${id} via ${result.method} (${result.durationSec}s)`);
       // The clip is now part of the base video, so a pending continuation
       // offer for it is fulfilled.
@@ -267,6 +272,8 @@ export async function revertEdits(id: string): Promise<void> {
     fs.copyFileSync(orig, videoPath(id));
     fs.rmSync(orig, { force: true });
     clearEditsMarker(id);
+    // The restored original also differs from an already-shared edited copy.
+    markShareStale(id);
     await refreshDerivedAssets(id, report);
     report(100, 'Original restored');
   });

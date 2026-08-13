@@ -8,8 +8,12 @@ tokens implement it.
 - **Strategy: Restrained.** Tinted neutrals + the violet accent (`--ol-accent: #635bff`) on
   primary actions, selection and live state only. Status colours (`--ol-success/danger/warning/
   record`) convey state, never decoration.
-- Light + dark themes; `prefers-color-scheme` default, `[data-theme]` override. Never `#000`/`#fff`
-  raw: neutrals are Apple-tinted (`#1d1d1f`, `#f5f5f7`).
+- Light + dark themes; `prefers-color-scheme` default, `[data-theme]` override. Page and text
+  neutrals are Apple-tinted (`#1d1d1f`, `#f5f5f7`), never raw `#000`/`#fff`. Pure white/black are
+  sanctioned only where tinting is wrong: `--ol-surface` cards on the tinted ground,
+  `--ol-on-accent` ink on solid accent/danger fills, text and controls over media or dark glass,
+  and video letterboxing.
+- Ink for the drawing pens is content, not chrome: `--ol-pen-*`, never `--ol-accent`/`--ol-record`.
 
 ## Surfaces
 

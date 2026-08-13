@@ -74,3 +74,111 @@ export function stopIntent(status: RecordingStatus): StopIntent {
 export function keepChunksOnCancel(elapsedSec: number): boolean {
   return elapsedSec > KEEP_ON_CANCEL_MIN_SEC;
 }
+
+// ---------------------------------------------------------------------------
+// Destructive-action confirm (delete / restart mid-take)
+// ---------------------------------------------------------------------------
+
+/** A take longer than this gets one chance to say no before delete/restart. */
+export const CONFIRM_DESTROY_MIN_SEC = 10;
+/** An unanswered confirm goes back to plain recording after this long. */
+export const CONFIRM_EXPIRY_MS = 12_000;
+
+/**
+ * True when discarding this much footage deserves a confirm. Short scraps go
+ * straight through - a confirm on a five-second false start is just friction.
+ */
+export function needsDestroyConfirm(status: RecordingStatus, elapsedSec: number): boolean {
+  if (status !== 'recording' && status !== 'paused') return false;
+  return elapsedSec >= CONFIRM_DESTROY_MIN_SEC;
+}
+
+// ---------------------------------------------------------------------------
+// Re-say the last bit (redo cuts)
+// ---------------------------------------------------------------------------
+
+/** How far back "re-say the last bit" rewinds. */
+export const REDO_BACK_MS = 10_000;
+
+/** A stretch of the raw take (pauses excluded) marked for removal at finalise. */
+export interface RedoCut {
+  fromMs: number;
+  toMs: number;
+}
+
+/** The cut a redo pressed at `recordedMs` marks: the last `backMs`, clamped to the start. */
+export function redoCutAt(recordedMs: number, backMs: number = REDO_BACK_MS): RedoCut {
+  return { fromMs: Math.max(0, recordedMs - backMs), toMs: recordedMs };
+}
+
+/** Merge overlapping/touching cuts (two redos in quick succession overlap). */
+export function mergeRedoCuts(cuts: RedoCut[]): RedoCut[] {
+  const sorted = cuts
+    .filter((c) => c.toMs > c.fromMs)
+    .map((c) => ({ fromMs: Math.max(0, c.fromMs), toMs: c.toMs }))
+    .sort((a, b) => a.fromMs - b.fromMs);
+  const merged: RedoCut[] = [];
+  for (const c of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && c.fromMs <= last.toMs) last.toMs = Math.max(last.toMs, c.toMs);
+    else merged.push({ ...c });
+  }
+  return merged;
+}
+
+/** Total milliseconds the merged cuts remove, for the HUD's jumped-back timer. */
+export function totalRedoCutMs(cuts: RedoCut[]): number {
+  return mergeRedoCuts(cuts).reduce((sum, c) => sum + (c.toMs - c.fromMs), 0);
+}
+
+/**
+ * Convert redo cuts into the keep ranges the trim engine takes, against the
+ * finished file's real duration. Null means "leave the video alone": no cuts
+ * land inside the file, or so little would survive that cutting is more
+ * likely a bug than an intent - keeping the full take is always the safe
+ * failure.
+ */
+export function redoKeepRanges(
+  cuts: RedoCut[],
+  durationSec: number
+): { start: number; end: number }[] | null {
+  const merged = mergeRedoCuts(cuts)
+    .map((c) => ({ start: c.fromMs / 1000, end: Math.min(c.toMs / 1000, durationSec) }))
+    .filter((c) => c.end - c.start > 0.05 && c.start < durationSec);
+  if (merged.length === 0) return null;
+  const keep: { start: number; end: number }[] = [];
+  let cursor = 0;
+  for (const c of merged) {
+    if (c.start - cursor > 0.05) keep.push({ start: cursor, end: c.start });
+    cursor = Math.max(cursor, c.end);
+  }
+  if (durationSec - cursor > 0.05) keep.push({ start: cursor, end: durationSec });
+  const keptSec = keep.reduce((sum, r) => sum + (r.end - r.start), 0);
+  if (keptSec < 0.5) return null;
+  return keep;
+}
+
+// ---------------------------------------------------------------------------
+// Mic silence watchdog (the audio twin of the camera-loss handler)
+// ---------------------------------------------------------------------------
+
+/** No audible mic signal for this long during a take = tell the user once. */
+export const MIC_SILENCE_MS = 15_000;
+/** RMS below this is digital silence (a dead/muted device), not a quiet room. */
+export const MIC_SILENCE_RMS = 0.0005;
+
+/**
+ * True when the mic has been flat for long enough to warn. Only a live,
+ * unmuted take counts: pause emits nothing on purpose, and a muted mic is the
+ * user's own choice.
+ */
+export function micSilenceTripped(
+  status: RecordingStatus,
+  micOn: boolean,
+  lastAudibleAt: number,
+  now: number
+): boolean {
+  if (status !== 'recording' || !micOn) return false;
+  if (lastAudibleAt <= 0) return false;
+  return now - lastAudibleAt > MIC_SILENCE_MS;
+}

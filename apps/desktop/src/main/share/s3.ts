@@ -24,7 +24,7 @@ import type {
   UploadProgress,
   VideoMeta,
 } from '@shared/types';
-import { buildPlayerPage, type PlayerPageOptions } from './player-page';
+import { buildPlayerPage, buildProcessingPage, type PlayerPageOptions } from './player-page';
 
 export interface S3ShareConfig {
   /** Custom endpoint for R2/B2/MinIO; empty = AWS default resolution. */
@@ -43,12 +43,17 @@ export interface S3ShareConfig {
 const PART_BYTES = 8 * 1024 * 1024;
 const MULTIPART_THRESHOLD = 16 * 1024 * 1024;
 
-/** Local file name -> remote object name. index.html is generated at upload time. */
+/**
+ * Local file name -> remote object name. index.html is generated at upload
+ * time. The small assets go FIRST so thumb.jpg (the link-preview image and
+ * the player poster) is live within seconds; the multi-GB video goes last
+ * before the page itself, which stays the "everything is ready" signal.
+ */
 const FILE_MAP: { local: string; remote: string; required: boolean }[] = [
-  { local: 'video.mp4', remote: 'video.mp4', required: true },
   { local: 'thumb.jpg', remote: 'thumb.jpg', required: false },
   { local: 'preview.gif', remote: 'preview.gif', required: false },
   { local: 'transcript.vtt', remote: 'captions.vtt', required: false },
+  { local: 'video.mp4', remote: 'video.mp4', required: true },
 ];
 
 const REMOTE_CONTENT_TYPES: Record<string, string> = {
@@ -99,6 +104,11 @@ export class S3ShareProvider implements ShareProvider {
     return `${this.prefix()}/${videoId}/${name}`;
   }
 
+  private publicUrlFor(videoId: string, name: string): string {
+    const base = this.cfg.publicBaseUrl.replace(/\/+$/, '');
+    return `${base}/${this.keyFor(videoId, name)}`;
+  }
+
   /** Everything the static page needs, carried from prepareShare to upload. */
   private pageOptions(meta: VideoMeta, filesDir: string): PlayerPageOptions {
     const exists = (name: string): boolean => {
@@ -109,14 +119,19 @@ export class S3ShareProvider implements ShareProvider {
       }
     };
     return {
-      title: meta.ai?.title || meta.title,
+      // meta.title is what the app shows everywhere (the AI title is only a
+      // suggestion until adopted), so it is what the client's page says too.
+      title: meta.title,
       createdAt: meta.createdAt,
       durationSec: meta.durationSec,
+      description: meta.description ?? null,
       chapters: meta.ai?.chapters ?? [],
       hasCaptions: exists('transcript.vtt'),
       hasThumb: exists('thumb.jpg'),
       allowDownload: meta.share?.allowDownload ?? true,
       cta: meta.share?.cta ?? null,
+      pageUrl: this.publicUrlFor(meta.id, 'index.html'),
+      thumbUrl: exists('thumb.jpg') ? this.publicUrlFor(meta.id, 'thumb.jpg') : undefined,
     };
   }
 
@@ -153,14 +168,38 @@ export class S3ShareProvider implements ShareProvider {
     return { videoId: meta.id, files, context: { meta: JSON.parse(JSON.stringify(meta)) as VideoMeta } };
   }
 
-  private async putObject(key: string, body: Buffer | string, contentType: string): Promise<void> {
+  /**
+   * Every key here is FIXED and overwritable (a re-share after an edit writes
+   * the same video.mp4 key), so nothing may be cached as immutable: a viewer
+   * or CDN edge that honoured a year-long immutable would keep serving the
+   * pre-edit cut forever. index.html stays shortest because it is the ready
+   * signal the copied link points at.
+   */
+  private cacheControlFor(key: string): string {
+    return key.endsWith('index.html') ? 'public, max-age=60' : 'public, max-age=3600';
+  }
+
+  /**
+   * Upload plan carrying only the (freshly chosen) thumbnail plus a rebuilt
+   * player page, pointed at this video's existing keys. Used when the user
+   * picks a custom thumbnail after sharing.
+   */
+  thumbnailPlan(meta: VideoMeta): UploadPlan {
+    const files: UploadPlanFile[] = [
+      { name: 'thumb.jpg', remote: this.keyFor(meta.id, 'thumb.jpg'), required: false },
+      { name: 'index.html', remote: this.keyFor(meta.id, 'index.html'), required: true },
+    ];
+    return { videoId: meta.id, files, context: { meta: JSON.parse(JSON.stringify(meta)) as VideoMeta } };
+  }
+
+  private async putObject(key: string, body: Buffer | string, contentType: string, cacheControl?: string): Promise<void> {
     await this.client().send(
       new PutObjectCommand({
         Bucket: this.cfg.bucket,
         Key: key,
         Body: typeof body === 'string' ? Buffer.from(body, 'utf8') : body,
         ContentType: contentType,
-        CacheControl: key.endsWith('index.html') ? 'public, max-age=60' : 'public, max-age=31536000, immutable',
+        CacheControl: cacheControl ?? this.cacheControlFor(key),
       })
     );
   }
@@ -172,7 +211,7 @@ export class S3ShareProvider implements ShareProvider {
         Bucket: this.cfg.bucket,
         Key: key,
         ContentType: REMOTE_CONTENT_TYPES['video.mp4'],
-        CacheControl: 'public, max-age=31536000, immutable',
+        CacheControl: this.cacheControlFor(key),
       })
     );
     const uploadId = create.UploadId;
@@ -223,6 +262,23 @@ export class S3ShareProvider implements ShareProvider {
     this.requireConfig();
     const meta = plan.context?.meta as VideoMeta | undefined;
     if (!meta) throw new Error('The upload plan is missing its video metadata; share the video again.');
+
+    // The share URL is on the clipboard from the moment recording stops, but
+    // the real page only lands after the video does - minutes on a domestic
+    // uplink. Publish a self-refreshing "still uploading" page at that key
+    // FIRST so an early click never sees the bucket's raw NoSuchKey XML.
+    // Only on a plan that carries the video: an assets-only plan (captions or
+    // thumbnail sync) runs against a live page and must not blank it.
+    if (plan.files.some((f) => f.name === 'index.html') && plan.files.some((f) => f.name === 'video.mp4')) {
+      const indexKey = this.keyFor(plan.videoId, 'index.html');
+      const page = this.pageOptions(meta, filesDir);
+      await this.putObject(
+        indexKey,
+        buildProcessingPage({ title: page.title, pageUrl: page.pageUrl, thumbUrl: page.thumbUrl }),
+        REMOTE_CONTENT_TYPES['index.html']!,
+        'no-store'
+      );
+    }
 
     for (const file of plan.files) {
       if (file.name === 'index.html') {

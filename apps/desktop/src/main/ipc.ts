@@ -18,16 +18,28 @@ import {
 } from './permissions';
 import { cameraEffectsStatus, openCameraEffectsPanel } from './camera-effects';
 import { getSettingsMasked, setSettings, getSettings } from './settings';
-import { fetchFfmpeg } from './ffmpeg';
+import { fetchFfmpeg, cancelJob } from './ffmpeg';
 import { validateShortcuts } from './shortcuts';
 import { broadcast, getMainWindow, showLauncher } from './windows';
-import { trimVideo, stitchVideos, revertEdits, confirmEdits, detectSilences } from './editor-jobs';
+import {
+  trimVideo,
+  stitchVideos,
+  revertEdits,
+  confirmEdits,
+  detectSilences,
+  beginContinuation,
+  cancelContinuation,
+  dismissContinuation,
+  claimContinuationTake,
+} from './editor-jobs';
 import { transcribeVideo, installWhisper } from './transcribe';
 import { generateAI, testAI } from './ai';
 import {
   shareVideo,
   unshareVideo,
   removeRemoteShare,
+  syncShareMetadata,
+  syncShareThumbnail,
   updateShareSettings,
   getShareActivity,
   testShareProvider,
@@ -125,7 +137,7 @@ async function retryPendingUnshares(): Promise<void> {
   const remaining: PendingUnshare[] = [];
   for (const entry of entries) {
     try {
-      await removeRemoteShare(entry.id, entry.provider);
+      await removeRemoteShare(entry.id, entry.provider, entry.url);
       log.info(`removed the orphaned shared copy of ${entry.id} (${entry.url})`);
     } catch (err) {
       log.warn(`orphaned shared copy of ${entry.id} still could not be removed: ${String(err)}`);
@@ -145,8 +157,9 @@ export function registerIpc(): void {
   handle('ol:pauseRecording', () => recorder.pauseRecording());
   handle('ol:resumeRecording', () => recorder.resumeRecording());
   handle('ol:stopRecording', () => recorder.stopRecording());
-  handle('ol:cancelRecording', () => recorder.cancelRecording());
-  handle('ol:restartRecording', () => recorder.restartRecording());
+  // Both run through the confirm gate: a long take gets one chance to say no.
+  handle('ol:cancelRecording', () => recorder.requestCancelRecording());
+  handle('ol:restartRecording', () => recorder.requestRestartRecording());
   handle('ol:getRecordingState', () => recorder.currentState());
   ipcMain.on('ol:toggleCamera', (_e, on: boolean) => recorder.toggleCamera(on));
   ipcMain.on('ol:setCameraLayout', (_e, layout: unknown) => {
@@ -168,7 +181,15 @@ export function registerIpc(): void {
   // -- library ---------------------------------------------------------------
   handle('ol:listVideos', () => library().list());
   handle('ol:getVideo', (_e, id: string) => library().get(id));
-  handle('ol:updateVideo', (_e, id: string, patch) => library().update(id, patch));
+  handle('ol:updateVideo', (_e, id: string, patch) => {
+    const updated = library().update(id, patch);
+    // A rename (or description/chapter edit) must reach the client's hosted
+    // page, or the app and the share tell two different stories. Best-effort
+    // background push; syncShareMetadata no-ops for unshared videos.
+    const p = (patch ?? {}) as Partial<VideoMeta>;
+    if ('title' in p || 'description' in p || 'ai' in p) void syncShareMetadata(id);
+    return updated;
+  });
   handle('ol:deleteVideo', async (_e, id: string, opts?: { force?: boolean }) => {
     // The delete confirmation promises the shared copy goes too. Local-only
     // deletion left the public link live forever with no UI left to revoke it,
@@ -205,19 +226,36 @@ export function registerIpc(): void {
     library().moveVideo(id, folderId);
   });
   handle('ol:searchVideos', (_e, q: string) => library().search(q));
-  handle('ol:setCustomThumbnail', (_e, id: string, source) => setCustomThumbnail(id, source));
+  handle('ol:setCustomThumbnail', async (_e, id: string, source) => {
+    await setCustomThumbnail(id, source);
+    // The hosted page shows the old auto-grabbed frame until the new one is
+    // pushed; best-effort, no-op for unshared videos.
+    void syncShareThumbnail(id);
+  });
   handle('ol:regeneratePreviews', (_e, id: string) => regeneratePreviews(id));
 
   // -- editor ------------------------------------------------------------------
   handle('ol:trimVideo', (_e, id: string, ranges: { start: number; end: number }[]) => trimVideo(id, ranges));
-  handle('ol:stitchVideos', (_e, id: string, appendId: string) => stitchVideos(id, appendId));
+  handle('ol:stitchVideos', (_e, id: string, appendId: string, appendRange?: { start: number; end: number }) =>
+    stitchVideos(id, appendId, appendRange)
+  );
   handle('ol:revertEdits', (_e, id: string) => revertEdits(id));
   handle('ol:confirmEdits', (_e, id: string) => confirmEdits(id));
   handle('ol:detectSilences', (_e, id: string) => detectSilences(id));
+  handle('ol:cancelEditJob', (_e, id: string) => cancelJob(id));
+  handle('ol:beginContinuation', (_e, id: string) => beginContinuation(id));
+  handle('ol:cancelContinuation', () => cancelContinuation());
+  handle('ol:dismissContinuation', (_e, id: string) => dismissContinuation(id));
+  handle('ol:claimContinuationTake', (_e, takeId: string) => claimContinuationTake(takeId));
 
   // -- transcription + AI --------------------------------------------------------
   handle('ol:transcribeVideo', (_e, id: string) => transcribeVideo(id));
-  handle('ol:generateAI', (_e, id: string, kinds: string[]) => generateAI(id, kinds));
+  handle('ol:generateAI', async (_e, id: string, kinds: string[]) => {
+    await generateAI(id, kinds);
+    // Chapters normally land AFTER auto-share on stop, so the hosted page
+    // would otherwise never gain them (captions already sync this way).
+    void syncShareMetadata(id);
+  });
   handle('ol:testAI', () => testAI());
   handle('ol:installWhisper', () => installWhisper((line) => broadcast('ol:setup-log', line)));
 

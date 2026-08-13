@@ -18,7 +18,8 @@ import type {
   VideoMeta,
 } from '@shared/types';
 import { QUALITY_BITRATES } from '@shared/types';
-import { getSettings } from './settings';
+import type { Settings } from '@shared/types';
+import { getSettings, setSettings } from './settings';
 import { log } from './logger';
 import {
   broadcast,
@@ -29,6 +30,7 @@ import {
   destroyEngineWindow,
   destroyHud,
   destroyLauncher,
+  destroyNotesOverlay,
   destroySwitcher,
   displayForSource,
   getMainWindow,
@@ -44,12 +46,14 @@ import {
   sendDrawColor,
   setBubbleVisible,
   setHudExpanded,
+  setHudPanel,
   setDrawInteractive,
   showBubble,
   showCountdown,
   showDrawOverlay,
   showHud,
   showLauncher,
+  showNotesOverlay,
   showSwitcher,
 } from './windows';
 import { setPendingCapture, clearPendingCapture, displayIdForSource } from './capture';
@@ -57,9 +61,18 @@ import {
   chunkWatchdogTripped,
   freeSpaceVerdict,
   keepChunksOnCancel,
+  micSilenceTripped,
+  MIC_SILENCE_RMS,
+  needsDestroyConfirm,
+  CONFIRM_EXPIRY_MS,
+  redoCutAt,
+  redoKeepRanges,
+  totalRedoCutMs,
   startBlockMessage,
   stopIntent,
+  type RedoCut,
 } from './recording-guards';
+import { trimVideoFile } from './editor-core';
 import * as ffmpeg from './ffmpeg';
 import { shareVideo } from './share';
 import { library } from './library';
@@ -93,6 +106,17 @@ interface ActiveRecording {
   lowDiskWarned: boolean;
   /** One camera-loss warning per session. */
   cameraLostNotified: boolean;
+  /** Stretches marked by "re-say the last bit", removed at finalise. */
+  redoCuts: RedoCut[];
+  /** A redo waiting on its resume countdown; the cut commits when it hits 0. */
+  pendingRedo: { cut: RedoCut; timer: NodeJS.Timeout; secondsLeft: number } | null;
+  /** A destructive action (delete/restart) waiting on the HUD confirm panel. */
+  confirmKind: 'cancel' | 'restart' | null;
+  confirmExpiry: NodeJS.Timeout | null;
+  /** Last time the mic level was above digital silence; feeds the silence watchdog. */
+  lastAudibleAt: number;
+  /** One dead-mic warning per silent stretch, not one per tick. */
+  micSilenceNotified: boolean;
   stoppedResolvers: { resolve: (r: { videoId: string }) => void; reject: (e: Error) => void }[];
 }
 
@@ -178,6 +202,7 @@ function failActiveRecording(message: string): void {
   closeSessionWindows();
   clearPendingCapture();
   if (rec) {
+    clearTransientPanels(rec);
     void endStreamSafe(rec.stream);
     writeManifest(rec, 'recording');
     broadcastRecoverablesChanged();
@@ -198,7 +223,9 @@ function freeBytesAt(dir: string): number | null {
 
 function elapsedSec(rec: ActiveRecording): number {
   const segment = rec.segmentStartedAt ? Date.now() - rec.segmentStartedAt : 0;
-  return Math.floor((rec.recordedMsBase + segment) / 1000);
+  // The timer shows what the final video will run, so committed redo cuts
+  // come off - the visible jump back is the feedback that the redo landed.
+  return Math.max(0, Math.floor((rec.recordedMsBase + segment - totalRedoCutMs(rec.redoCuts)) / 1000));
 }
 
 function emitState(partial?: Partial<RecordingState>): void {
@@ -215,6 +242,8 @@ function emitState(partial?: Partial<RecordingState>): void {
       // Full-face layout has no screen to draw on; cam-only never does.
       drawAvailable:
         active.opts.mode !== 'cam' && !!active.opts.sourceIsDisplay && active.cameraLayout !== 'full',
+      ...(active.confirmKind ? { confirm: active.confirmKind } : {}),
+      ...(active.pendingRedo ? { redoCountdown: active.pendingRedo.secondsLeft } : {}),
       ...partial,
     };
   } else {
@@ -297,6 +326,19 @@ function startTick(): void {
         }
       }
 
+      // Mic silence watchdog: a dead or wrongly-picked mic records a silent
+      // client video. Warn while re-recording still costs a minute.
+      if (
+        !active.micSilenceNotified &&
+        micSilenceTripped(active.status, active.micOn, active.lastAudibleAt, Date.now())
+      ) {
+        active.micSilenceNotified = true;
+        notifyUser(
+          'error',
+          'The microphone has not picked up any sound for a while. If you are speaking, check the mic - the recording is still running.'
+        );
+      }
+
       const maxMin = getSettings().recording.maxDurationMin;
       if (maxMin > 0 && elapsedSec(active) >= maxMin * 60) {
         log.info(`max duration of ${maxMin} min reached; stopping`);
@@ -316,7 +358,21 @@ function closeSessionWindows(): void {
   destroyBubble();
   destroyCountdown();
   destroyDrawOverlay();
+  destroyNotesOverlay();
   destroySwitcher();
+}
+
+/** Stop the confirm and redo timers so a finished session cannot fire them late. */
+function clearTransientPanels(rec: ActiveRecording): void {
+  if (rec.pendingRedo) {
+    clearInterval(rec.pendingRedo.timer);
+    rec.pendingRedo = null;
+  }
+  if (rec.confirmExpiry) {
+    clearTimeout(rec.confirmExpiry);
+    rec.confirmExpiry = null;
+  }
+  rec.confirmKind = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -385,10 +441,20 @@ export async function startRecording(opts: RecordingOptions): Promise<void> {
     lastChunkAt: 0,
     lowDiskWarned: false,
     cameraLostNotified: false,
+    redoCuts: [],
+    pendingRedo: null,
+    confirmKind: null,
+    confirmExpiry: null,
+    lastAudibleAt: 0,
+    micSilenceNotified: false,
     stoppedResolvers: [],
   };
   const rec = active;
   armChunkStream(rec);
+  // Remember the picked source so the launcher can offer it first next time.
+  if (opts.sourceId && settings.recording.lastSourceId !== opts.sourceId) {
+    setSettings({ recording: { lastSourceId: opts.sourceId } } as Partial<Settings>);
+  }
 
   try {
     if (opts.mode !== 'cam' && opts.sourceId) {
@@ -510,9 +576,14 @@ async function beginEngineCapture(rec: ActiveRecording): Promise<void> {
   rec.status = 'recording';
   rec.segmentStartedAt = Date.now();
   rec.lastChunkAt = Date.now();
+  // Baseline for the silence watchdog: a mic that never delivers a single
+  // audible sample should trip it too, not sit below its "ever audible" gate.
+  rec.lastAudibleAt = Date.now();
   writeManifest(rec, 'recording');
 
   showHud(rec.display);
+  const notes = settings.recording.notes.trim();
+  if (notes) showNotesOverlay(rec.display, notes);
   if (rec.opts.mode === 'screen-cam' && rec.cameraOn) {
     showBubble(rec.display, settings.bubble.size);
     showSwitcher(rec.display);
@@ -579,6 +650,9 @@ export async function pauseRecording(): Promise<void> {
 export async function resumeRecording(): Promise<void> {
   const rec = active;
   if (!rec || rec.status !== 'paused') return;
+  // A redo countdown owns the paused state; its commit or escape hatch is the
+  // only way back to recording, or the engine would resume twice.
+  if (rec.pendingRedo) return;
   getOrCreateEngineWindow().webContents.send('engine:resume', null);
   rec.segmentStartedAt = Date.now();
   // Fresh watchdog window: a paused recorder emits no chunks by design.
@@ -613,6 +687,9 @@ export async function stopRecording(): Promise<{ videoId: string }> {
     rec.recordedMsBase += Date.now() - rec.segmentStartedAt;
     rec.segmentStartedAt = null;
   }
+  // A stop during the redo countdown keeps the footage: the uncommitted cut is
+  // dropped rather than applied, because keeping too much is the safe failure.
+  clearTransientPanels(rec);
   rec.status = 'processing';
   stopTick();
   // HUD + bubble close instantly on stop (SPEC R14).
@@ -749,6 +826,7 @@ function maybeAutoShareOnStop(videoId: string): void {
 export async function cancelRecording(opts?: { quiet?: boolean }): Promise<void> {
   const rec = active;
   if (!rec) return;
+  clearTransientPanels(rec);
   rec.cancelled = true;
   if (countdownWaiter) countdownWaiter();
   // Release a start still in flight quietly: its begin path re-checks session
@@ -828,6 +906,12 @@ async function startRecordingWithoutCountdown(opts: RecordingOptions): Promise<v
     lastChunkAt: 0,
     lowDiskWarned: false,
     cameraLostNotified: false,
+    redoCuts: [],
+    pendingRedo: null,
+    confirmKind: null,
+    confirmExpiry: null,
+    lastAudibleAt: 0,
+    micSilenceNotified: false,
     stoppedResolvers: [],
   };
   const rec = active;
@@ -849,6 +933,7 @@ async function startRecordingWithoutCountdown(opts: RecordingOptions): Promise<v
  */
 async function hardResetSession(rec: ActiveRecording | null, error?: string): Promise<void> {
   const owns = rec !== null && active === rec;
+  if (rec) clearTransientPanels(rec);
   if (owns) {
     active = null;
     stopTick();
@@ -866,6 +951,124 @@ async function hardResetSession(rec: ActiveRecording | null, error?: string): Pr
   if (owns || active === null) {
     emitState({ status: 'idle', elapsedSec: 0, ...(error ? { error } : {}) });
   }
+}
+
+// ---------------------------------------------------------------------------
+// Destructive-action confirm (HUD panel; shared by buttons and global hotkeys)
+// ---------------------------------------------------------------------------
+
+function openConfirm(rec: ActiveRecording, kind: 'cancel' | 'restart'): void {
+  // A redo countdown in flight is abandoned harmlessly: the take resumes and
+  // the confirm panel takes over.
+  if (rec.pendingRedo) cancelPendingRedo();
+  if (rec.confirmExpiry) clearTimeout(rec.confirmExpiry);
+  rec.confirmKind = kind;
+  rec.confirmExpiry = setTimeout(() => closeConfirm(rec), CONFIRM_EXPIRY_MS);
+  setHudPanel('confirm');
+  emitState();
+}
+
+function closeConfirm(rec: ActiveRecording): void {
+  if (rec.confirmExpiry) clearTimeout(rec.confirmExpiry);
+  rec.confirmExpiry = null;
+  rec.confirmKind = null;
+  if (active === rec) {
+    setHudPanel('normal');
+    emitState();
+  }
+}
+
+/** Cancel, behind a confirm once the take is long enough to be worth one. */
+export function requestCancelRecording(): void {
+  const rec = active;
+  if (!rec) return;
+  if (needsDestroyConfirm(rec.status, elapsedSec(rec))) openConfirm(rec, 'cancel');
+  else void cancelRecording();
+}
+
+/** Restart, behind the same confirm gate as cancel. */
+export function requestRestartRecording(): void {
+  const rec = active;
+  if (!rec) return;
+  if (needsDestroyConfirm(rec.status, elapsedSec(rec))) openConfirm(rec, 'restart');
+  else void restartRecording().catch((err) => log.error(`restart failed: ${String(err)}`));
+}
+
+/** Answer the HUD confirm. `confirmed` false keeps recording. */
+export function resolveRecordingConfirm(confirmed: boolean): void {
+  const rec = active;
+  if (!rec || !rec.confirmKind) return;
+  const kind = rec.confirmKind;
+  closeConfirm(rec);
+  if (!confirmed) return;
+  if (kind === 'cancel') void cancelRecording();
+  else void restartRecording().catch((err) => log.error(`restart failed: ${String(err)}`));
+}
+
+// ---------------------------------------------------------------------------
+// Re-say the last bit (redo cuts)
+// ---------------------------------------------------------------------------
+
+/** Breathing room before the take resumes after a redo. */
+const REDO_RESUME_COUNTDOWN_SEC = 3;
+
+/**
+ * Go back ten seconds and say it again: pause the take, count down on the
+ * HUD, then resume with the fluffed stretch marked for removal at finalise.
+ */
+export function redoLastTen(): void {
+  const rec = active;
+  if (!rec || rec.status !== 'recording' || rec.pendingRedo || rec.confirmKind) return;
+  const recordedMs = rec.recordedMsBase + (rec.segmentStartedAt ? Date.now() - rec.segmentStartedAt : 0);
+  getOrCreateEngineWindow().webContents.send('engine:pause', null);
+  if (rec.segmentStartedAt) {
+    rec.recordedMsBase += Date.now() - rec.segmentStartedAt;
+    rec.segmentStartedAt = null;
+  }
+  rec.status = 'paused';
+  const timer = setInterval(() => {
+    const p = rec.pendingRedo;
+    if (!p || active !== rec) {
+      clearInterval(timer);
+      return;
+    }
+    p.secondsLeft -= 1;
+    if (p.secondsLeft <= 0) commitPendingRedo(rec);
+    else emitState();
+  }, 1000);
+  rec.pendingRedo = { cut: redoCutAt(recordedMs), timer, secondsLeft: REDO_RESUME_COUNTDOWN_SEC };
+  setHudPanel('redo');
+  emitState();
+  log.info(`redo armed: will cut ${JSON.stringify(rec.pendingRedo.cut)} on resume`);
+}
+
+function resumeAfterRedo(rec: ActiveRecording): void {
+  getOrCreateEngineWindow().webContents.send('engine:resume', null);
+  rec.segmentStartedAt = Date.now();
+  rec.lastChunkAt = Date.now();
+  rec.lastAudibleAt = Date.now();
+  rec.status = 'recording';
+  setHudPanel('normal');
+  emitState();
+}
+
+function commitPendingRedo(rec: ActiveRecording): void {
+  const p = rec.pendingRedo;
+  if (!p) return;
+  clearInterval(p.timer);
+  rec.redoCuts.push(p.cut);
+  rec.pendingRedo = null;
+  resumeAfterRedo(rec);
+}
+
+/** Escape hatch while the redo countdown runs: keep the take as it was. */
+export function cancelPendingRedo(): void {
+  const rec = active;
+  const p = rec?.pendingRedo;
+  if (!rec || !p) return;
+  clearInterval(p.timer);
+  rec.pendingRedo = null;
+  resumeAfterRedo(rec);
 }
 
 // ---------------------------------------------------------------------------
@@ -1055,6 +1258,24 @@ export function registerEngineIpc(): void {
     );
   });
 
+  // Engine-side mic RMS sample: relayed to the HUD meter and fed to the
+  // silence watchdog. A level above digital silence also re-arms the warning.
+  ipcMain.on('engine:mic-level', (_event, level: number) => {
+    const rec = active;
+    if (!rec || typeof level !== 'number' || !Number.isFinite(level)) return;
+    broadcast('ol:mic-level', level);
+    if (level > MIC_SILENCE_RMS) {
+      rec.lastAudibleAt = Date.now();
+      rec.micSilenceNotified = false;
+    }
+  });
+
+  ipcMain.on('ol:redoLastTen', () => redoLastTen());
+  ipcMain.on('ol:cancelPendingRedo', () => cancelPendingRedo());
+  ipcMain.on('ol:resolveRecordingConfirm', (_event, confirmed: boolean) =>
+    resolveRecordingConfirm(confirmed === true)
+  );
+
   ipcMain.on('engine:stopped', () => {
     engineStopWaiter?.();
   });
@@ -1087,6 +1308,7 @@ async function finalizeRecording(rec: ActiveRecording): Promise<string> {
     mode: rec.opts.mode,
     approxDurationSec: durationSec,
     createdAt: new Date(rec.startedAt),
+    redoCuts: rec.redoCuts,
   });
   // Mark the manifest done BEFORE cleanup: if the rm fails, the leftover dir
   // must not be offered as a recoverable for a take that saved fine.
@@ -1100,13 +1322,18 @@ async function finalizeRecording(rec: ActiveRecording): Promise<string> {
   return videoId;
 }
 
-/** Shared by normal stop and crash recovery. */
+/**
+ * Shared by normal stop and crash recovery. `redoCuts` (recorded time, pauses
+ * excluded) are trimmed out of the finished file; crash recovery never passes
+ * them, because keeping the full take is the safe failure.
+ */
 export async function processCaptureFile(input: {
   chunkFile: string;
   mimeType: string;
   mode: RecordingMode;
   approxDurationSec: number;
   createdAt: Date;
+  redoCuts?: RedoCut[];
 }): Promise<string> {
   const bins = ffmpeg.requireBinaries();
   const store = library();
@@ -1145,6 +1372,31 @@ export async function processCaptureFile(input: {
       /* best effort */
     }
     throw err;
+  }
+
+  // Apply the "re-say the last bit" cuts now, before previews, so the thumb,
+  // gif and waveform never show the fluffed stretches. Best-effort: a failed
+  // trim keeps the full take, never fails the recording.
+  if (input.redoCuts && input.redoCuts.length > 0) {
+    try {
+      const probed = await ffmpeg.probe(bins, finalPath).catch(() => null);
+      const keep = redoKeepRanges(input.redoCuts, probed?.durationSec ?? expectedDuration);
+      if (keep) {
+        emitState({ status: 'processing', processingNote: 'Removing the re-said parts' });
+        const tmpOut = path.join(videoDir, '.redo-tmp.mp4');
+        try {
+          await ffmpeg.enqueueJob(videoId, 'trim', async (report, signal) => {
+            await trimVideoFile(bins, finalPath, tmpOut, keep, (pct) => report(pct, 'Removing the re-said parts'), signal);
+          });
+          fs.renameSync(tmpOut, finalPath);
+          log.info(`${videoId}: removed ${input.redoCuts.length} re-said stretch(es)`);
+        } finally {
+          fs.rmSync(tmpOut, { force: true });
+        }
+      }
+    } catch (err) {
+      log.warn(`${videoId}: redo cuts could not be applied, keeping the full take: ${String(err)}`);
+    }
   }
 
   // video.mp4 exists and is valid from here on. Probing it for exact dimensions

@@ -119,9 +119,12 @@ export class ServerShareProvider implements ShareProvider {
   }
 
   async prepareShare(meta: VideoMeta): Promise<ShareResult> {
+    // meta.title is what the app shows everywhere (the AI title is only a
+    // suggestion until the user adopts it), so it is what the client's page
+    // must say too - anything else makes a rename in the app a silent lie.
     const created = await this.api('POST', '/videos', {
       id: meta.id,
-      title: meta.ai?.title || meta.title,
+      title: meta.title,
       description: meta.description,
       createdAt: meta.createdAt,
       durationSec: meta.durationSec,
@@ -161,6 +164,17 @@ export class ServerShareProvider implements ShareProvider {
   captionsPlan(meta: VideoMeta): UploadPlan {
     const remoteId = meta.share?.remoteId ?? remoteIdFromShareUrl(meta.share?.url, meta.id);
     const files: UploadPlanFile[] = [{ name: 'transcript.vtt', remote: 'captions.vtt', required: false }];
+    return { videoId: meta.id, files, context: { remoteId } };
+  }
+
+  /**
+   * Upload plan carrying only thumb.jpg, pointed at the existing remote id.
+   * Used when the user picks a custom thumbnail after sharing, so the hosted
+   * page shows the frame they chose instead of the auto-grabbed one.
+   */
+  thumbnailPlan(meta: VideoMeta): UploadPlan {
+    const remoteId = meta.share?.remoteId ?? remoteIdFromShareUrl(meta.share?.url, meta.id);
+    const files: UploadPlanFile[] = [{ name: 'thumb.jpg', remote: 'thumb.jpg', required: false }];
     return { videoId: meta.id, files, context: { remoteId } };
   }
 

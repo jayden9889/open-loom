@@ -18,6 +18,7 @@ import {
 } from '../components/ui';
 import { ShareDialog } from '../components/share/ShareDialog';
 import { ActivityPanel } from '../components/share/ActivityPanel';
+import { ThumbnailPicker } from '../components/share/ThumbnailPicker';
 
 /** Render transcript text with the search query highlighted. */
 function HighlightedText({ text, query }: { text: string; query: string }) {
@@ -38,6 +39,30 @@ function HighlightedText({ text, query }: { text: string; query: string }) {
 }
 
 const SPEEDS = [0.8, 1, 1.2, 1.5, 1.7, 2, 2.5];
+
+/**
+ * Playback preferences survive across videos: reviewing four takes should not
+ * mean setting 1.5x four times. localStorage, not settings - this is player
+ * state, not configuration.
+ */
+const PLAYER_PREFS_KEY = 'ol-player-prefs';
+
+function loadPlayerPrefs(): { speed: number; volume: number; muted: boolean } {
+  try {
+    const raw = localStorage.getItem(PLAYER_PREFS_KEY);
+    if (raw) {
+      const p = JSON.parse(raw) as { speed?: unknown; volume?: unknown; muted?: unknown };
+      return {
+        speed: typeof p.speed === 'number' && SPEEDS.includes(p.speed) ? p.speed : 1,
+        volume: typeof p.volume === 'number' && p.volume >= 0 && p.volume <= 1 ? p.volume : 1,
+        muted: p.muted === true,
+      };
+    }
+  } catch {
+    // Corrupted prefs fall back to defaults.
+  }
+  return { speed: 1, volume: 1, muted: false };
+}
 
 interface VttCue {
   start: number;
@@ -116,9 +141,9 @@ export function WatchView({
   const [current, setCurrent] = useState(0);
   const [duration, setDuration] = useState(0);
   const [buffered, setBuffered] = useState<{ start: number; end: number }[]>([]);
-  const [speed, setSpeed] = useState(1);
-  const [volume, setVolume] = useState(1);
-  const [muted, setMuted] = useState(false);
+  const [speed, setSpeed] = useState(() => loadPlayerPrefs().speed);
+  const [volume, setVolume] = useState(() => loadPlayerPrefs().volume);
+  const [muted, setMuted] = useState(() => loadPlayerPrefs().muted);
   const [speedOpen, setSpeedOpen] = useState(false);
   const [captionsOn, setCaptionsOn] = useState(false);
   const [cues, setCues] = useState<VttCue[] | null>(null);
@@ -151,11 +176,16 @@ export function WatchView({
   const [youtubeError, setYoutubeError] = useState<string | null>(null);
   const [youtubeRemoving, setYoutubeRemoving] = useState(false);
 
-  // A recording that just landed opens straight into the publish flow: the
-  // YouTube panel arrives expanded so getting the link is one click, not two.
+  const [thumbPickerOpen, setThumbPickerOpen] = useState(false);
+
+  // A recording that just landed opens straight into the job this product
+  // exists for: sending a private link to one person. The Share dialog arrives
+  // open (showing the link auto-share already minted, or the one-click share
+  // button), NOT the YouTube panel - a nervous first take must never sit one
+  // confident click away from a public channel.
   useEffect(() => {
-    if (freshRecording) setYoutubeOpen(true);
-  }, [freshRecording, id]);
+    if (freshRecording && settings.sharing.provider !== 'none') setShareOpen(true);
+  }, [freshRecording, id, settings.sharing.provider]);
 
   // Reflect whether a YouTube account is connected whenever the panel is shown
   // (and on window focus, so returning from the Settings consent updates it).
@@ -417,6 +447,11 @@ export function WatchView({
       v.volume = volume;
       v.muted = muted;
     }
+    try {
+      localStorage.setItem(PLAYER_PREFS_KEY, JSON.stringify({ speed, volume, muted }));
+    } catch {
+      // Full or unavailable storage only costs remembering the preference.
+    }
     // mediaRefresh: an edit job reloads the element, and the media load algorithm
     // resets playbackRate to 1x, so these have to be re-applied afterwards.
   }, [speed, volume, muted, mediaRefresh]);
@@ -520,19 +555,28 @@ export function WatchView({
           </button>
         )}
         <div className="watch-head-actions">
+          {/* The job this product exists for is a private link to one person,
+              so Share holds the primary slot. Once the link is live the button
+              becomes the one-click copy; YouTube lives in the More menu. */}
           <button
             type="button"
             className="btn-primary"
-            disabled={youtubePublishing}
-            onClick={startYouTubePublish}
+            onClick={() => {
+              if (meta.share?.uploadedAt) {
+                window.openloom.copyToClipboard(meta.share.url);
+                push('success', 'Link copied.');
+              } else {
+                setShareOpen(true);
+              }
+            }}
             title={
-              meta.youtubeUrl
-                ? 'Upload this recording to YouTube again (a second copy)'
-                : 'Publish this recording to YouTube as unlisted'
+              meta.share?.uploadedAt
+                ? 'Copy the private link to send to your client'
+                : 'Get a private link to send to your client'
             }
           >
-            <Icon.Play width={15} height={15} />
-            {meta.youtubeUrl ? 'Republish to YouTube' : 'Publish to YouTube'}
+            <Icon.Link width={15} height={15} />
+            {meta.share?.uploadedAt ? 'Copy link' : 'Share'}
           </button>
           <button
             type="button"
@@ -564,6 +608,24 @@ export function WatchView({
                 label: meta.share ? 'Share settings' : 'Share',
                 icon: <Icon.Link width={15} height={15} />,
                 onClick: () => setShareOpen(true),
+              },
+              {
+                label: 'Change the thumbnail…',
+                icon: <Icon.Camera width={15} height={15} />,
+                onClick: () => setThumbPickerOpen(true),
+              },
+              {
+                label: 'Record another take',
+                icon: <Icon.Record width={15} height={15} />,
+                onClick: () => window.openloom.openLauncher(),
+              },
+              {
+                label: 'Publish to YouTube…',
+                icon: <Icon.Play width={15} height={15} />,
+                onClick: () => {
+                  setTab('details');
+                  setYoutubeOpen(true);
+                },
               },
               {
                 label: navigator.platform.toLowerCase().includes('mac') ? 'Reveal in Finder' : 'Show in folder',
@@ -849,19 +911,52 @@ export function WatchView({
                   The upload did not finish, so this link is not live yet. Retry to make it work.
                 </p>
               )}
+              {meta.share?.uploadedAt && meta.share.staleSince && (
+                <p className="side-note" role="status">
+                  You have edited this recording since it was shared, so the link still plays the version
+                  from before your edit. Update it to send your edited version.
+                </p>
+              )}
               {meta.share &&
                 (meta.share.uploadedAt ? (
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    onClick={() => {
-                      window.openloom.copyToClipboard(meta.share!.url);
-                      push('success', 'Link copied.');
-                    }}
-                  >
-                    <Icon.Link width={15} height={15} />
-                    Copy share link
-                  </button>
+                  <div className="btn-row">
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => {
+                        window.openloom.copyToClipboard(meta.share!.url);
+                        push('success', 'Link copied.');
+                      }}
+                    >
+                      <Icon.Link width={15} height={15} />
+                      Copy share link
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      title="Open the page your client will see"
+                      onClick={() => window.openloom.openExternal(meta.share!.url)}
+                    >
+                      <Icon.Reveal width={15} height={15} />
+                      See what your client sees
+                    </button>
+                    {meta.share.staleSince && (
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => {
+                          push('info', 'Updating the shared link with your edited version.');
+                          void window.openloom
+                            .shareVideo(id)
+                            .then(() => onChanged())
+                            .catch((err) => push('error', cleanIpcError(err)));
+                        }}
+                      >
+                        <Icon.Refresh width={15} height={15} />
+                        Update the shared link
+                      </button>
+                    )}
+                  </div>
                 ) : (
                   <button
                     type="button"
@@ -1115,9 +1210,26 @@ export function WatchView({
                   // click. Same destructive action, so it asks the same way.
                   const shared = meta?.share ? ' Its shared link will stop working.' : '';
                   if (!window.confirm(`Delete "${meta?.title ?? 'this recording'}"?${shared}`)) return;
-                  void window.openloom
-                    .deleteVideo(id)
-                    .then(onDeleted, (err) => push('error', cleanIpcError(err)));
+                  void window.openloom.deleteVideo(id).then(onDeleted, (err) => {
+                    const msg = cleanIpcError(err);
+                    // The main process refuses the delete when the shared copy
+                    // cannot be removed (host unreachable), so the link never
+                    // silently outlives the UI. But "the app will not let me
+                    // delete my own recording" needs an escape hatch: force
+                    // tombstones the orphaned link and retries on every launch.
+                    if (meta?.share && /shared copy could not be removed/i.test(msg)) {
+                      const anyway = window.confirm(
+                        'The share host could not be reached, so the shared copy is still up.\n\nDelete the local recording anyway? The link stays live until Open Loom can reach the host, and it will keep trying on every launch.'
+                      );
+                      if (anyway) {
+                        void window.openloom
+                          .deleteVideo(id, { force: true })
+                          .then(onDeleted, (err2) => push('error', cleanIpcError(err2)));
+                      }
+                      return;
+                    }
+                    push('error', msg);
+                  });
                 }}
               >
                 <Icon.Trash width={15} height={15} />
@@ -1349,6 +1461,22 @@ export function WatchView({
           )}
         </aside>
       </div>
+
+      {thumbPickerOpen && (
+        <ThumbnailPicker
+          videoId={id}
+          videoUrl={videoUrl}
+          durationSec={duration || meta.durationSec}
+          currentTimeSec={current}
+          onClose={() => setThumbPickerOpen(false)}
+          onChanged={() => {
+            setThumbPickerOpen(false);
+            setRefresh((r) => r + 1);
+            void onChanged();
+            push('success', 'Thumbnail updated.');
+          }}
+        />
+      )}
 
       {shareOpen && (
         <ShareDialog

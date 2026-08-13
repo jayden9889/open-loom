@@ -29,12 +29,14 @@ const VideoCard = memo(function VideoCard({
   video,
   upload,
   onOpen,
+  onEdit,
   onMenu,
   onRetryUpload,
 }: {
   video: VideoMeta;
   upload?: CardUpload;
   onOpen: (video: VideoMeta) => void;
+  onEdit: (video: VideoMeta) => void;
   onMenu: (x: number, y: number, video: VideoMeta) => void;
   onRetryUpload: (video: VideoMeta) => void;
 }) {
@@ -85,6 +87,11 @@ const VideoCard = memo(function VideoCard({
           style={{ visibility: !showGif && thumbFailed ? 'hidden' : undefined }}
           onError={() => (showGif ? setGifFailed(true) : setThumbFailed(true))}
         />
+        {!showGif && thumbFailed && (
+          <span className="video-thumb-fallback" aria-hidden="true">
+            <Icon.Camera width={28} height={28} />
+          </span>
+        )}
         <span className="video-duration">{formatDuration(video.durationSec)}</span>
         {uploading && (
           <span className="video-upload" aria-label={`Uploading ${upload!.pct}%`}>
@@ -121,6 +128,15 @@ const VideoCard = memo(function VideoCard({
           )}
           <button
             type="button"
+            className="video-trim"
+            title="Cut the start, the end, or a mistake in the middle"
+            onClick={() => onEdit(video)}
+          >
+            <Icon.Scissors width={12} height={12} />
+            Trim
+          </button>
+          <button
+            type="button"
             className="icon-btn video-more"
             aria-label="More actions"
             onClick={(e) => {
@@ -141,6 +157,7 @@ export function LibraryView({
   folders,
   folderId,
   onOpen,
+  onEdit,
   onChanged,
   onRecord,
   onOpenSharingSettings,
@@ -149,6 +166,7 @@ export function LibraryView({
   folders: Folder[];
   folderId: string | null;
   onOpen: (id: string) => void;
+  onEdit: (id: string) => void;
   onChanged: () => Promise<void>;
   onRecord: () => void;
   onOpenSharingSettings: () => void;
@@ -197,6 +215,7 @@ export function LibraryView({
   );
 
   const openCard = useCallback((video: VideoMeta) => onOpen(video.id), [onOpen]);
+  const editCard = useCallback((video: VideoMeta) => onEdit(video.id), [onEdit]);
   const menuCard = useCallback((x: number, y: number, video: VideoMeta) => setMenu({ x, y, video }), []);
 
   // Search titles locally for instant feedback + transcripts via main.
@@ -245,6 +264,11 @@ export function LibraryView({
       label: video.share ? 'Share settings…' : 'Share…',
       icon: <Icon.Link width={15} height={15} />,
       onClick: () => setSharing(video),
+    },
+    {
+      label: 'Trim and edit',
+      icon: <Icon.Scissors width={15} height={15} />,
+      onClick: () => onEdit(video.id),
     },
     {
       label: 'Rename',
@@ -390,6 +414,7 @@ export function LibraryView({
               video={v}
               upload={uploads[v.id]}
               onOpen={openCard}
+              onEdit={editCard}
               onMenu={menuCard}
               onRetryUpload={retryUpload}
             />

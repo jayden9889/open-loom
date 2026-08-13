@@ -202,7 +202,13 @@ export function Launcher() {
   const [starting, setStarting] = useState(false);
   const [loadingSources, setLoadingSources] = useState(true);
   const [screenBlocked, setScreenBlocked] = useState(false);
+  const [notes, setNotes] = useState('');
   const lastSourceError = useRef<string | null>(null);
+  // The source recorded last time, applied once when both settings and the
+  // source list have arrived (either can win the race).
+  const lastSourceId = useRef('');
+  const lastSourceApplied = useRef(false);
+  const notesSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refreshSources = useCallback(async () => {
     // macOS keys Screen Recording to the app's code signature and path, so a
@@ -265,6 +271,8 @@ export function Launcher() {
       setSettings(s);
       applyTheme(s.theme);
       setMode(s.recording.defaultMode === 'cam' ? 'cam' : 'screen-cam');
+      setNotes(s.recording.notes);
+      lastSourceId.current = s.recording.lastSourceId;
       // Ask for device labels; without a one-time getUserMedia the names are blank.
       try {
         const probe = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
@@ -295,6 +303,29 @@ export function Launcher() {
     };
   }, [refreshSources, push]);
 
+  // Offer the source recorded last time first, when it still exists. Runs once
+  // both the settings and a source list are in; a vanished source falls back
+  // to the default pick without a word.
+  useEffect(() => {
+    if (lastSourceApplied.current) return;
+    const last = lastSourceId.current;
+    if (!settings || sources.length === 0) return;
+    lastSourceApplied.current = true;
+    if (last && sources.some((s) => s.id === last)) setSourceId(last);
+  }, [sources, settings]);
+
+  /** Persist the talking notes, debounced so a restart mid-typing keeps them. */
+  const saveNotes = useCallback((text: string) => {
+    setNotes(text);
+    if (notesSaveTimer.current) clearTimeout(notesSaveTimer.current);
+    notesSaveTimer.current = setTimeout(() => {
+      void window.openloom
+        .getSettings()
+        .then((s) => window.openloom.setSettings({ recording: { ...s.recording, notes: text } }))
+        .catch(() => undefined);
+    }, 500);
+  }, []);
+
   // Escape dismisses the panel (it comes back via the app or on next launch).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -317,9 +348,11 @@ export function Launcher() {
     if (!settings) return;
     setStarting(true);
     try {
-      // Persist device + mode choices for next time.
+      // Persist device + mode choices (and the notes as typed, in case the
+      // debounced save has not fired yet) for next time.
+      if (notesSaveTimer.current) clearTimeout(notesSaveTimer.current);
       await window.openloom.setSettings({
-        recording: { ...settings.recording, defaultMode: mode, cameraId, micId },
+        recording: { ...settings.recording, defaultMode: mode, cameraId, micId, notes },
       });
       await window.openloom.startRecording({
         mode,
@@ -497,6 +530,19 @@ export function Launcher() {
           Full-face recording: your camera fills the whole video.
         </p>
       )}
+
+      <div className="launcher-notes">
+        <label className="field-label" htmlFor="nr-notes">
+          Talking notes
+        </label>
+        <textarea
+          id="nr-notes"
+          rows={2}
+          placeholder="Jot what to say - it floats on screen while you record. Only you see it."
+          value={notes}
+          onChange={(e) => saveNotes(e.target.value)}
+        />
+      </div>
 
       <div className="launcher-foot">
         <button type="button" className="btn-primary launcher-start" disabled={!canStart} onClick={() => void start()}>

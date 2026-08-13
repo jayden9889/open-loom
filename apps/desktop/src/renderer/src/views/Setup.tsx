@@ -10,9 +10,22 @@ import { useToasts, cleanIpcError } from '../components/ui';
 
 type PillState = 'ok' | 'missing' | 'pending';
 
-function Pill({ state, okText, missingText }: { state: PillState; okText: string; missingText: string }) {
+/** `missingTone: 'todo'` renders the missing pill in accent, not red - a
+ * one-time download is a to-do, not a failure. */
+function Pill({
+  state,
+  okText,
+  missingText,
+  missingTone = 'missing',
+}: {
+  state: PillState;
+  okText: string;
+  missingText: string;
+  missingTone?: 'missing' | 'todo';
+}) {
+  const cls = state === 'missing' && missingTone === 'todo' ? 'pill-todo' : `pill-${state}`;
   return (
-    <span className={`pill pill-${state}`}>
+    <span className={`pill ${cls}`}>
       {state === 'ok' ? okText : state === 'pending' ? 'Checking' : missingText}
     </span>
   );
@@ -24,6 +37,7 @@ interface RowProps {
   state: PillState;
   okText?: string;
   missingText?: string;
+  missingTone?: 'missing' | 'todo';
   fixLabel?: string;
   onFix?: () => void;
   fixing?: boolean;
@@ -37,7 +51,12 @@ function CheckRow(props: RowProps) {
         <p>{props.detail}</p>
       </div>
       <div className="setup-row-actions">
-        <Pill state={props.state} okText={props.okText ?? 'Ready'} missingText={props.missingText ?? 'Needs attention'} />
+        <Pill
+          state={props.state}
+          okText={props.okText ?? 'Ready'}
+          missingText={props.missingText ?? 'Needs attention'}
+          missingTone={props.missingTone}
+        />
         {props.state !== 'ok' && props.onFix && (
           <button type="button" className="btn-secondary" onClick={props.onFix} disabled={props.fixing}>
             {props.fixing ? 'Working' : (props.fixLabel ?? 'Fix')}
@@ -98,7 +117,7 @@ export function SetupView({ onDone }: { onDone: () => void }) {
     setLogLines(['Downloading a static ffmpeg build for this machine...']);
     try {
       await window.openloom.fetchFfmpeg();
-      push('success', 'ffmpeg installed.');
+      push('success', 'Video engine installed.');
     } catch (err) {
       push('error', cleanIpcError(err));
     } finally {
@@ -160,20 +179,32 @@ export function SetupView({ onDone }: { onDone: () => void }) {
             onFix={() => void fixMedia('mic')}
           />
           <CheckRow
-            title="ffmpeg"
-            detail="Turns raw captures into seekable MP4s, thumbnails and previews. Open Loom can download a static build for you, or use one already on your PATH."
+            title="Video engine"
+            detail="Turns your recordings into normal video files you can play and share. Open Loom downloads it once and sets it up for you (it is ffmpeg, for the technically curious)."
             state={ffmpegState}
-            missingText="Not found"
-            fixLabel="Download ffmpeg"
+            missingText="One-time download"
+            missingTone="todo"
+            fixLabel="Download"
             onFix={() => void fixFfmpeg()}
             fixing={fetchingFfmpeg}
           />
         </div>
 
         {(fetchingFfmpeg || logLines.length > 1) && (
-          <pre className="setup-log" ref={logRef} aria-label="Install log">
-            {logLines.join('\n')}
-          </pre>
+          <div className="setup-progress">
+            {fetchingFfmpeg && (
+              <div className="setup-progress-line" role="status">
+                <span className="spinner" aria-hidden="true" />
+                Downloading the video engine. This usually takes under a minute.
+              </div>
+            )}
+            <details className="setup-details">
+              <summary>Show details</summary>
+              <pre className="setup-log" ref={logRef} aria-label="Install log">
+                {logLines.join('\n')}
+              </pre>
+            </details>
+          </div>
         )}
 
         <div className="setup-foot">
@@ -182,7 +213,7 @@ export function SetupView({ onDone }: { onDone: () => void }) {
               ? 'All set.'
               : !screenReady
                 ? 'Screen Recording is required to record your screen.'
-                : 'ffmpeg is required to save recordings.'}
+                : 'One last download is needed before recordings can be saved.'}
           </span>
           <button type="button" className="btn-primary" disabled={!canContinue} onClick={onDone}>
             <Icon.Check width={15} height={15} />

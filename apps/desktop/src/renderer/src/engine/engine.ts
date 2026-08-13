@@ -434,7 +434,51 @@ function humanMediaError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+// ---------------------------------------------------------------------------
+// Mic level meter (feeds the HUD meter + main's silence watchdog)
+// ---------------------------------------------------------------------------
+
+let micMeter: { ownedCtx: AudioContext | null; timer: ReturnType<typeof setInterval> } | null = null;
+
+/**
+ * Sample the mic's RMS at ~2Hz and relay it to main. Taps the raw track ahead
+ * of the recorder graph, so a broken meter can never break the take. Pause
+ * emits nothing on purpose - main's watchdog treats silence-while-paused as
+ * expected.
+ */
+function startMicMeter(s: EngineSession): void {
+  stopMicMeter();
+  if (!s.micTrack) return;
+  try {
+    const ownedCtx = s.audioCtx ? null : new AudioContext();
+    const ctx = s.audioCtx ?? ownedCtx!;
+    const source = ctx.createMediaStreamSource(new MediaStream([s.micTrack]));
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 1024;
+    source.connect(analyser);
+    const data = new Float32Array(analyser.fftSize);
+    const timer = setInterval(() => {
+      if (s.recorder.state !== 'recording') return;
+      analyser.getFloatTimeDomainData(data);
+      let sum = 0;
+      for (const v of data) sum += v * v;
+      internal.engineMicLevel(Math.sqrt(sum / data.length));
+    }, 500);
+    micMeter = { ownedCtx, timer };
+  } catch {
+    /* a dead meter is cosmetic; the recording matters more */
+  }
+}
+
+function stopMicMeter(): void {
+  if (!micMeter) return;
+  clearInterval(micMeter.timer);
+  if (micMeter.ownedCtx && micMeter.ownedCtx.state !== 'closed') void micMeter.ownedCtx.close();
+  micMeter = null;
+}
+
 function teardown(): void {
+  stopMicMeter();
   if (!session) return;
   const s = session;
   session = null;
@@ -530,6 +574,7 @@ internal.onEngineBegin((payload) => {
       });
 
       recorder.start(1000);
+      startMicMeter(s);
       internal.engineStarted(recorder.mimeType || mimeType || 'video/webm');
     } catch (err) {
       internal.engineError(humanMediaError(err));

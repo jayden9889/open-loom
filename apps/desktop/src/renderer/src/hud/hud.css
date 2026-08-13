@@ -181,15 +181,15 @@ body {
 }
 
 .hud-pen-red {
-  background: #ff453a;
+  background: var(--ol-pen-red);
 }
 
 .hud-pen-violet {
-  background: #635bff;
+  background: var(--ol-pen-violet);
 }
 
 .hud-pen-yellow {
-  background: #ffd60a;
+  background: var(--ol-pen-yellow);
 }
 
 .hud-pen-clear {
@@ -197,15 +197,11 @@ body {
   height: 32px;
 }
 
-/* Done drawing: exits ink mode; the ink melts on the next scroll. */
+/* Done drawing: exits ink mode; the ink melts on the next scroll. Neutral
+   .hud-btn treatment - success green is state, never button decoration. */
 .hud-draw-exit {
   width: 32px;
   height: 32px;
-  color: #30d158;
-}
-
-.hud-draw-exit:hover {
-  background: rgba(48, 209, 88, 0.16);
 }
 
 .hud-hint {
@@ -220,4 +216,90 @@ body {
   font-weight: 500;
   line-height: 1.25;
   color: rgba(255, 255, 255, 0.65);
+}
+
+/* ------------------------------------------------------------- mic meter */
+
+/* Thin perceptual level bar under the mic toggle: proof the voice is being
+   captured. scaleX, not width, so the 2Hz updates never trigger layout. */
+.hud-mic-meter {
+  width: 40px;
+  height: 3px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.hud-mic-meter-fill {
+  height: 100%;
+  background: var(--ol-success);
+  transform-origin: left;
+  transition: transform 320ms ease-out;
+}
+
+/* ------------------------------------------- confirm + redo panels */
+
+/* The wider face the window wears while a confirm or redo countdown runs
+   (HUD_PANEL_SIZE in windows.ts). Same glass recipe, readable copy. */
+.hud.hud-panel {
+  justify-content: center;
+  gap: 10px;
+  padding: 16px 16px 14px;
+  text-align: center;
+}
+
+.hud-panel-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.hud-panel-body {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.hud-panel-btn {
+  -webkit-app-region: no-drag;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.1);
+  color: #f5f5f7;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.hud-panel-btn:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.hud-panel-btn:focus-visible {
+  outline: 2px solid var(--ol-accent);
+  outline-offset: 1px;
+}
+
+/* The safe choice leads: accent fill, first in the stack. */
+.hud-panel-keep {
+  background: var(--ol-accent);
+  border-color: transparent;
+}
+
+.hud-panel-keep:hover {
+  background: var(--ol-accent-hover, var(--ol-accent));
+}
+
+.hud-panel-danger {
+  color: var(--ol-record);
+  border-color: rgba(255, 69, 58, 0.4);
+  background: transparent;
+}
+
+.hud-panel-danger:hover {
+  background: rgba(255, 69, 58, 0.12);
 }

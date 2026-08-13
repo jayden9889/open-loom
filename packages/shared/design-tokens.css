@@ -27,6 +27,13 @@
   --ol-warning: #ff9f0a;
   --ol-record: #ff453a;
 
+  /* Drawing ink (annotation pens). Content colours, not chrome: deliberately
+     decoupled from the brand/status tokens so ink can diverge without moving
+     the UI. Same in both themes - ink draws over the desktop, not the app. */
+  --ol-pen-red: #ff453a;
+  --ol-pen-violet: #635bff;
+  --ol-pen-yellow: #ffd60a;
+
   /* Radius */
   --ol-radius-card: 12px;
   --ol-radius-control: 8px;
@@ -54,7 +61,9 @@
   /* Subtle elevation only (never a highlight device) */
   --ol-elev-card: 0 1px 3px rgba(0, 0, 0, 0.08);
 
-  /* Light theme */
+  /* Light theme. Cards sit pure white ON the tinted page ground - that is the
+     one sanctioned #ffffff neutral (see DESIGN.md, Color); on-accent ink is
+     the other. Everything else stays Apple-tinted. */
   --ol-bg: #f5f5f7;
   --ol-surface: #ffffff;
   --ol-surface-2: #fafafa;

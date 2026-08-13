@@ -16,6 +16,12 @@ export interface WatchPageData {
   creator: string | null;
   createdAt: string;
   durationSec: number;
+  /** One line of context from the creator, shown under the title. */
+  description: string | null;
+  /** Absolute URL of this page, for the og:url link-preview tag. */
+  pageUrl: string | null;
+  /** Absolute URL of thumb.jpg, for the og:image link-preview tag. */
+  thumbUrl: string | null;
   allowComments: boolean;
   allowReactions: boolean;
   allowDownload: boolean;
@@ -153,6 +159,7 @@ a:hover { text-decoration: underline; }
 
 .headline { margin-top: 20px; }
 .headline h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; }
+.headline .desc { margin-top: 8px; color: var(--ol-text-secondary); font-size: 14px; white-space: pre-wrap; word-break: break-word; max-width: 70ch; }
 .byline { margin-top: 4px; color: var(--ol-text-secondary); font-size: 13px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .byline .dot::before { content: '\\00B7'; }
 
@@ -273,14 +280,44 @@ const ICONS = {
 const LOGO =
   '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="#635bff" stroke-width="2.6"/><circle cx="12" cy="12" r="3.4" fill="#ff453a"/></svg>';
 
-function shell(title: string, bodyHtml: string, opts: { embed?: boolean; script?: string } = {}): string {
+/** Data for the Open Graph / Twitter Card link-preview tags. */
+export interface OgData {
+  title: string;
+  description?: string | null;
+  pageUrl?: string | null;
+  thumbUrl?: string | null;
+}
+
+/**
+ * Link-preview tags so a pasted share URL unfurls as a titled card with a
+ * picture instead of a naked URL in WhatsApp / Slack / email. Only emitted
+ * for pages a link holder may see anyway (never the password gate), and
+ * robots stays noindex: unfurling is not indexing.
+ */
+function openGraphTags(og: OgData): string {
+  const lines = [
+    `<meta property="og:title" content="${escapeHtml(og.title)}">`,
+    `<meta property="og:type" content="video.other">`,
+    `<meta property="og:description" content="${escapeHtml(og.description?.trim() || 'Watch this recording')}">`,
+  ];
+  if (og.pageUrl) lines.push(`<meta property="og:url" content="${escapeHtml(og.pageUrl)}">`);
+  if (og.thumbUrl) {
+    lines.push(`<meta property="og:image" content="${escapeHtml(og.thumbUrl)}">`);
+    lines.push(`<meta name="twitter:card" content="summary_large_image">`);
+  } else {
+    lines.push(`<meta name="twitter:card" content="summary">`);
+  }
+  return lines.join('\n');
+}
+
+function shell(title: string, bodyHtml: string, opts: { embed?: boolean; script?: string; og?: OgData } = {}): string {
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; media-src 'self'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'self'">
+${opts.og ? `${openGraphTags(opts.og)}\n` : ''}<meta http-equiv="Content-Security-Policy" content="default-src 'none'; media-src 'self'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'self'">
 <title>${escapeHtml(title)}</title>
 <style>${CSS}</style>
 </head>
@@ -865,9 +902,17 @@ export function renderWatchPage(data: WatchPageData): string {
   </div>
 </div>`;
 
+  const og: OgData = {
+    title: data.title,
+    description: data.description,
+    pageUrl: data.pageUrl,
+    thumbUrl: data.thumbUrl,
+  };
+
   if (data.embed) {
     return shell(data.title, playerHtml, {
       embed: true,
+      og,
       script: `window.OL_ICONS=${JSON.stringify({ play: ICONS.play, pause: ICONS.pause, volume: ICONS.volume, muted: ICONS.muted })};`,
     })
       .replace('</body>', `<script id="ol-data" type="application/json">${dataJson}</script><script>${WATCH_JS}</script></body>`);
@@ -883,6 +928,7 @@ export function renderWatchPage(data: WatchPageData): string {
         ${data.creator ? `<span>${escapeHtml(data.creator)}</span><span class="dot"></span>` : ''}
         <span>${escapeHtml(dateLabel)}</span>
       </div>
+      ${data.description?.trim() ? `<p class="desc">${escapeHtml(data.description.trim())}</p>` : ''}
     </div>
     <div class="action-row">
       ${reactionsHtml}
@@ -899,10 +945,16 @@ export function renderWatchPage(data: WatchPageData): string {
 <script>window.OL_ICONS=${JSON.stringify({ play: ICONS.play, pause: ICONS.pause, volume: ICONS.volume, muted: ICONS.muted })};</script>
 <script>${WATCH_JS}</script>`;
 
-  return shell(data.title, body);
+  return shell(data.title, body, { og });
 }
 
-export function renderProcessingPage(title: string, videoId: string, embed: boolean): string {
+/**
+ * `og` carries the link-preview tags: the link is pasted (and crawled by the
+ * messenger) the moment recording stops, while this page is what a crawler
+ * gets for the whole upload - without tags here the preview would be a naked
+ * URL and stay cached that way.
+ */
+export function renderProcessingPage(title: string, videoId: string, embed: boolean, og?: OgData): string {
   const body = `${embed ? '' : header('')}
 <div class="center-wrap">
   <div class="center-card">
@@ -920,7 +972,7 @@ export function renderProcessingPage(title: string, videoId: string, embed: bool
   }
   setTimeout(poll, 2000);
 })();`;
-  return shell(`${title} - processing`, body, { embed, script });
+  return shell(`${title} - processing`, body, { embed, script, og });
 }
 
 export function renderPasswordPage(videoId: string, embed: boolean): string {

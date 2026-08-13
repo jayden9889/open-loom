@@ -8,11 +8,11 @@ import type { ShortcutSettings } from '@shared/types';
 import { getSettings, onSettingsChanged } from './settings';
 import { log } from './logger';
 import {
-  cancelRecording,
   isPaused,
   isRecordingActive,
   pauseRecording,
-  restartRecording,
+  requestCancelRecording,
+  requestRestartRecording,
   resumeRecording,
   startRecording,
   stopRecording,
@@ -66,8 +66,10 @@ function onPauseResume(): void {
 const ACTIONS: Record<keyof ShortcutSettings, () => void> = {
   startStop: onStartStop,
   pauseResume: onPauseResume,
-  cancel: () => void cancelRecording(),
-  restart: () => void restartRecording().catch((err) => log.error(`restart failed: ${String(err)}`)),
+  // Through the same confirm gate as the HUD buttons: a hotkey one mis-press
+  // away from pause must not silently destroy a long take.
+  cancel: () => requestCancelRecording(),
+  restart: () => requestRestartRecording(),
   draw: () => toggleDraw(!currentState().drawOn),
 };
 

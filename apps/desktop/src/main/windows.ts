@@ -185,7 +185,10 @@ export function showLauncher(opts?: { inactive?: boolean }): BrowserWindow {
     maximizable: false,
     fullscreenable: false,
     skipTaskbar: true,
-    hasShadow: false,
+    /* The glass recipe's soft ambient shadow (DESIGN.md, Surfaces). The panel
+       fills the window edge to edge, so a CSS shadow would clip; the native
+       macOS shadow follows the rounded shape and costs no dead click area. */
+    hasShadow: true,
     show: false,
     title: 'Open Loom Recorder',
     webPreferences: { ...basePrefs },
@@ -201,6 +204,8 @@ export function showLauncher(opts?: { inactive?: boolean }): BrowserWindow {
   launcherWindow.once('ready-to-show', () => {
     if (opts?.inactive) launcherWindow?.showInactive();
     else launcherWindow?.show();
+    // Transparent windows can first paint before macOS computes their shadow.
+    if (isMac) launcherWindow?.invalidateShadow();
   });
   loadPage(launcherWindow, 'launcher');
   launcherWindow.on('closed', () => {
@@ -267,20 +272,47 @@ function excludeFromCapture(win: BrowserWindow): void {
   }
 }
 
-export const HUD_SIZE = { width: 68, height: 388 };
+export const HUD_SIZE = { width: 68, height: 508 };
 /** Extra height for the draw toolbar (pen colours + clear + done) while ink is on. */
 export const HUD_DRAW_EXTRA = 155;
+/** Wider footprint while the HUD shows the confirm or redo panel (readable copy). */
+export const HUD_PANEL_SIZE = { width: 232, height: 248 };
 
-/** Frameless control bar, left-center of the recorded display (SPEC R7). */
+/** Which face the HUD currently wears; drives the window bounds. */
+type HudPanel = 'normal' | 'confirm' | 'redo';
+let hudPanel: HudPanel = 'normal';
+let hudDrawExpanded = false;
+
+function applyHudBounds(): void {
+  if (!hudWindow || hudWindow.isDestroyed()) return;
+  const b = hudWindow.getBounds();
+  const target =
+    hudPanel === 'normal'
+      ? { width: HUD_SIZE.width, height: HUD_SIZE.height + (hudDrawExpanded ? HUD_DRAW_EXTRA : 0) }
+      : { width: HUD_PANEL_SIZE.width, height: HUD_PANEL_SIZE.height };
+  if (b.width !== target.width || b.height !== target.height) {
+    hudWindow.setBounds({ x: b.x, y: b.y, ...target });
+  }
+}
+
+/** Frameless control bar, left side of the recorded display (SPEC R7). */
 export function showHud(display: Display): BrowserWindow {
   destroyHud();
+  hudPanel = 'normal';
+  hudDrawExpanded = false;
   const { workArea } = display;
+  const height = Math.min(HUD_SIZE.height, workArea.height - 32);
+  // Centre the bar in the space ABOVE the bubble's bottom-left home, so the
+  // two never open on top of each other on a laptop screen.
+  const bubbleReserve = BUBBLE_SIZES.M + 48;
+  const y =
+    workArea.y + Math.max(16, Math.round((workArea.height - bubbleReserve - height) / 2));
   hudWindow = overlayBase(
     {
       x: workArea.x + 16,
-      y: workArea.y + Math.round((workArea.height - HUD_SIZE.height) / 2),
+      y,
       width: HUD_SIZE.width,
-      height: HUD_SIZE.height,
+      height,
     },
     true
   );
@@ -300,16 +332,46 @@ export function showHud(display: Display): BrowserWindow {
   return hudWindow;
 }
 
+/** Swap the HUD between its control column and the wider confirm/redo panels. */
+export function setHudPanel(panel: 'normal' | 'confirm' | 'redo'): void {
+  hudPanel = panel;
+  applyHudBounds();
+}
+
 export function destroyHud(): void {
   if (hudWindow && !hudWindow.isDestroyed()) hudWindow.destroy();
   hudWindow = null;
+}
+
+/**
+ * Where the user last dragged the circular bubble, kept for the session so a
+ * layout flip or a second take puts their face back where they chose - never
+ * back over the content they moved it off.
+ */
+let bubbleCircleBounds: Rectangle | null = null;
+let bubbleShape: 'circle' | 'full' = 'circle';
+
+/** The dragged circle position when it still fits this display; null = use the default. */
+function storedCircleBounds(display: Display, diameter: number): Rectangle | null {
+  if (!bubbleCircleBounds) return null;
+  const { workArea } = display;
+  // Anchor the current diameter to the stored bottom-left corner (S/M/L may
+  // have changed since the drag).
+  const x = bubbleCircleBounds.x;
+  const y = bubbleCircleBounds.y + bubbleCircleBounds.height - diameter;
+  const fits =
+    x >= workArea.x &&
+    y >= workArea.y &&
+    x + diameter <= workArea.x + workArea.width &&
+    y + diameter <= workArea.y + workArea.height;
+  return fits ? { x, y, width: diameter, height: diameter } : null;
 }
 
 /** Circular webcam bubble, bottom-left of the recorded display (SPEC R6). */
 export function showBubble(display: Display, size: BubbleSize): BrowserWindow {
   const diameter = BUBBLE_SIZES[size];
   const { workArea } = display;
-  const bounds = {
+  const bounds = storedCircleBounds(display, diameter) ?? {
     x: workArea.x + 24,
     y: workArea.y + workArea.height - diameter - 24,
     width: diameter,
@@ -320,8 +382,14 @@ export function showBubble(display: Display, size: BubbleSize): BrowserWindow {
     bubbleWindow.showInactive();
     return bubbleWindow;
   }
+  bubbleShape = 'circle';
   bubbleWindow = overlayBase(bounds, true);
   bubbleWindow.setMovable(true);
+  bubbleWindow.on('moved', () => {
+    if (bubbleShape === 'circle' && bubbleWindow && !bubbleWindow.isDestroyed()) {
+      bubbleCircleBounds = bubbleWindow.getBounds();
+    }
+  });
   bubbleWindow.once('ready-to-show', () => bubbleWindow?.showInactive());
   loadPage(bubbleWindow, 'bubble');
   bubbleWindow.on('closed', () => {
@@ -335,12 +403,14 @@ export function resizeBubbleKeepAnchor(size: BubbleSize): void {
   if (!bubbleWindow || bubbleWindow.isDestroyed()) return;
   const diameter = BUBBLE_SIZES[size];
   const cur = bubbleWindow.getBounds();
-  bubbleWindow.setBounds({
+  const next = {
     x: cur.x,
     y: cur.y + cur.height - diameter,
     width: diameter,
     height: diameter,
-  });
+  };
+  bubbleWindow.setBounds(next);
+  if (bubbleShape === 'circle') bubbleCircleBounds = next;
 }
 
 export function setBubbleVisible(visible: boolean): void {
@@ -349,17 +419,23 @@ export function setBubbleVisible(visible: boolean): void {
   else bubbleWindow.hide();
 }
 
-/** Restore the bubble window to its circular size, anchored bottom-left of the display. */
+/**
+ * Restore the bubble window to its circular size: back to where the user last
+ * dragged it, or the bottom-left default when it was never moved.
+ */
 export function positionBubbleCircle(display: Display, size: BubbleSize): void {
   if (!bubbleWindow || bubbleWindow.isDestroyed()) return;
   const diameter = BUBBLE_SIZES[size];
   const { workArea } = display;
-  bubbleWindow.setBounds({
-    x: workArea.x + 24,
-    y: workArea.y + workArea.height - diameter - 24,
-    width: diameter,
-    height: diameter,
-  });
+  bubbleShape = 'circle';
+  bubbleWindow.setBounds(
+    storedCircleBounds(display, diameter) ?? {
+      x: workArea.x + 24,
+      y: workArea.y + workArea.height - diameter - 24,
+      width: diameter,
+      height: diameter,
+    }
+  );
   bubbleWindow.setIgnoreMouseEvents(false);
 }
 
@@ -372,6 +448,7 @@ export function positionBubbleCircle(display: Display, size: BubbleSize): void {
  */
 export function positionBubbleFull(display: Display): void {
   if (!bubbleWindow || bubbleWindow.isDestroyed()) return;
+  bubbleShape = 'full';
   bubbleWindow.setBounds(display.bounds);
   bubbleWindow.setIgnoreMouseEvents(true);
 }
@@ -462,6 +539,51 @@ export function getSwitcherWindow(): BrowserWindow | null {
   return switcherWindow && !switcherWindow.isDestroyed() ? switcherWindow : null;
 }
 
+// ---------------------------------------------------------------------------
+// Talking-notes overlay (something to read while recording)
+// ---------------------------------------------------------------------------
+
+let notesWindow: BrowserWindow | null = null;
+
+export const NOTES_SIZE = { width: 460, height: 208 };
+
+/**
+ * Glass card pinned top-centre of the recorded display - right under the
+ * webcam, so reading it keeps the eyes near the lens. Shows the notes typed
+ * on the launcher. Excluded from capture: the presenter reads it, the client
+ * never sees it. Draggable if it covers something they need.
+ */
+export function showNotesOverlay(display: Display, text: string): BrowserWindow {
+  destroyNotesOverlay();
+  const { workArea } = display;
+  notesWindow = overlayBase(
+    {
+      x: workArea.x + Math.round((workArea.width - NOTES_SIZE.width) / 2),
+      y: workArea.y + 12,
+      width: NOTES_SIZE.width,
+      height: NOTES_SIZE.height,
+    },
+    true
+  );
+  notesWindow.setMovable(true);
+  notesWindow.setAlwaysOnTop(true, 'screen-saver', 1);
+  excludeFromCapture(notesWindow);
+  notesWindow.once('ready-to-show', () => notesWindow?.showInactive());
+  loadPage(notesWindow, 'notes');
+  const wc = notesWindow.webContents;
+  if (wc.isLoading()) wc.once('did-finish-load', () => wc.send('notes:set-text', text));
+  else wc.send('notes:set-text', text);
+  notesWindow.on('closed', () => {
+    notesWindow = null;
+  });
+  return notesWindow;
+}
+
+export function destroyNotesOverlay(): void {
+  if (notesWindow && !notesWindow.isDestroyed()) notesWindow.destroy();
+  notesWindow = null;
+}
+
 /** 3-2-1 countdown overlay covering the recorded display (SPEC R5). */
 export function showCountdown(display: Display): BrowserWindow {
   destroyCountdown();
@@ -506,10 +628,8 @@ export function setDrawInteractive(interactive: boolean): void {
 
 /** Grow/shrink the HUD to make room for the draw toolbar. */
 export function setHudExpanded(expanded: boolean): void {
-  if (!hudWindow || hudWindow.isDestroyed()) return;
-  const b = hudWindow.getBounds();
-  const target = HUD_SIZE.height + (expanded ? HUD_DRAW_EXTRA : 0);
-  if (b.height !== target) hudWindow.setBounds({ ...b, height: target });
+  hudDrawExpanded = expanded;
+  applyHudBounds();
 }
 
 export function sendDrawColor(color: string): void {

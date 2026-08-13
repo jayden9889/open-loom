@@ -38,6 +38,8 @@ export function defaultSettings(saveDir: string): Settings {
       micId: '',
       systemAudio: false,
       maxDurationMin: 0,
+      notes: '',
+      lastSourceId: '',
     },
     bubble: { size: 'M', mirror: true },
     shortcuts: { ...DEFAULT_SHORTCUTS },

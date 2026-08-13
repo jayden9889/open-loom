@@ -49,7 +49,7 @@ export type RecordingStatus = 'idle' | 'countdown' | 'recording' | 'paused' | 'p
 
 export interface RecordingState {
   status: RecordingStatus;
-  /** Seconds actually recorded (paused time excluded). */
+  /** Seconds the final video will run (paused time and re-said stretches excluded). */
   elapsedSec: number;
   mode?: RecordingMode;
   cameraOn?: boolean;
@@ -65,6 +65,16 @@ export interface RecordingState {
   lastVideoId?: string;
   /** Human-readable error when a recording failed. Cleared on the next start. */
   error?: string;
+  /**
+   * A destructive action (delete/restart) is waiting on the HUD's confirm
+   * panel. Set by the main process so the global hotkeys share the same gate.
+   */
+  confirm?: 'cancel' | 'restart';
+  /**
+   * Seconds left on the "re-say the last bit" countdown. While present the
+   * take is paused and the HUD shows the redo panel with its escape hatch.
+   */
+  redoCountdown?: number;
 }
 
 /** A crashed or interrupted recording found on disk at launch (crash recovery, SPEC R8). */
@@ -106,6 +116,15 @@ export interface VideoMeta {
      */
     remoteId?: string;
     uploadedAt?: string;
+    /**
+     * Set when the local file was edited AFTER the share upload finished, so
+     * the hosted copy no longer matches what the library plays. Written by
+     * markShareStale (editor jobs call it on completion), cleared by the next
+     * successful upload of this video. Drives the "your edits are not on the
+     * shared link yet" state in Watch (documented additive extension, see
+     * docs/DECISIONS.md).
+     */
+    staleSince?: string;
     privacy: 'link' | 'password';
     allowComments: boolean;
     allowReactions: boolean;
@@ -312,6 +331,14 @@ export interface Settings {
     systemAudio: boolean;
     /** Minutes; 0 = no limit. */
     maxDurationMin: number;
+    /**
+     * The user's talking notes, shown in a capture-excluded overlay during a
+     * take so they are never memorising a script. Persisted so a restart or a
+     * second take keeps them.
+     */
+    notes: string;
+    /** desktopCapturer id of the last recorded source, restored when it still exists. */
+    lastSourceId: string;
   };
   bubble: {
     size: BubbleSize;
@@ -627,8 +654,20 @@ export interface OpenLoomAPI {
   pauseRecording(): Promise<void>;
   resumeRecording(): Promise<void>;
   stopRecording(): Promise<{ videoId: string }>;
+  /** Ask to discard the take. Short takes go immediately; longer ones raise the HUD confirm. */
   cancelRecording(): Promise<void>;
+  /** Ask to start the take over. Same confirm gate as cancel (additive; see docs/DECISIONS.md). */
   restartRecording(): Promise<void>;
+  /**
+   * Go back ten seconds and say it again: pauses the take, counts down on the
+   * HUD, then resumes with the fluffed stretch marked for removal at finalise
+   * (additive; see docs/DECISIONS.md).
+   */
+  redoLastTen(): void;
+  /** Escape hatch for redoLastTen while its countdown runs: keep the take as it was. */
+  cancelPendingRedo(): void;
+  /** Answer the HUD confirm raised by cancel/restart. `confirmed` false keeps recording. */
+  resolveRecordingConfirm(confirmed: boolean): void;
   onRecordingState(cb: (s: RecordingState) => void): () => void;
   toggleCamera(on: boolean): void;
   toggleMic(on: boolean): void;
@@ -668,7 +707,23 @@ export interface OpenLoomAPI {
 
   // editor
   trimVideo(id: string, ranges: { start: number; end: number }[]): Promise<void>;
-  stitchVideos(id: string, appendId: string): Promise<void>;
+  /** `appendRange` appends only that stretch of the clip (additive; see docs/DECISIONS.md). */
+  stitchVideos(id: string, appendId: string, appendRange?: { start: number; end: number }): Promise<void>;
+  /** Abort this video's running or queued trim/stitch; the pending call rejects as cancelled (additive; see docs/DECISIONS.md). */
+  cancelEditJob(id: string): Promise<void>;
+  /**
+   * "End it here, film the rest" (additive; see docs/DECISIONS.md): arm a
+   * continuation so the next recording that lands is offered as an append onto
+   * this video, with the launcher flipped to its recording mode so the takes
+   * match. cancelContinuation disarms; dismissContinuation clears a waiting
+   * take's offer (the take stays in the library); claimContinuationTake is
+   * called with a just-landed recording id and answers the base video to route
+   * back to, or null when no continuation was armed.
+   */
+  beginContinuation(id: string): Promise<void>;
+  cancelContinuation(): Promise<void>;
+  dismissContinuation(id: string): Promise<void>;
+  claimContinuationTake(takeId: string): Promise<{ baseId: string } | null>;
   /** Quiet stretches in the current file, for the cut-quiet-parts action (additive; see docs/DECISIONS.md). */
   detectSilences(id: string): Promise<{ start: number; end: number }[]>;
   onJobProgress(cb: (j: JobProgress) => void): () => void;
@@ -793,11 +848,15 @@ export interface OpenLoomInternal {
   onNavigate(cb: (nav: { view: string; mode?: string; id?: string }) => void): () => void;
   /** Toasts pushed from the main process (e.g. the share-on-stop flow). */
   onToast(cb: (t: { kind: 'info' | 'success' | 'error'; text: string }) => void): () => void;
+  /** Live microphone level during a take (0..1 RMS, ~2Hz), for the HUD meter. */
+  onMicLevel(cb: (level: number) => void): () => void;
   // engine window
   engineReady(): void;
   engineStarted(mimeType: string): void;
   engineStopped(): void;
   engineError(message: string): void;
+  /** Engine-side mic RMS sample; main relays it to the HUD and feeds the silence watchdog. */
+  engineMicLevel(level: number): void;
   sendChunk(chunk: Uint8Array): void;
   onEngineBegin(cb: (p: EngineBeginPayload) => void): () => void;
   onEngineStop(cb: () => void): () => void;
@@ -815,6 +874,9 @@ export interface OpenLoomInternal {
   // countdown window
   countdownDone(): void;
   countdownCancel(): void;
+  // notes overlay window
+  /** The talking notes to display; sent by main once the window has loaded. */
+  onNotesText(cb: (text: string) => void): () => void;
   // draw window
   onDrawEnable(cb: (on: boolean) => void): () => void;
   onDrawRipple(cb: (p: { x: number; y: number }) => void): () => void;

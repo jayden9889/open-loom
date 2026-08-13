@@ -211,7 +211,7 @@ function EffectState({ on }: { on: boolean }) {
         gap: 7,
         fontSize: 13,
         fontWeight: 600,
-        color: on ? 'var(--ol-success)' : 'var(--ol-text-dim)',
+        color: on ? 'var(--ol-success)' : 'var(--ol-text-tertiary)',
       }}
     >
       <span

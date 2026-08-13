@@ -67,11 +67,22 @@ const stroke = {
 const PEN_COLORS = ['red', 'violet', 'yellow'] as const;
 type PenColor = (typeof PEN_COLORS)[number];
 
+/**
+ * Perceptual mic meter fill: the same decibel mapping the waveform uses, so
+ * conversational speech sits mid-meter instead of hugging the floor.
+ */
+function micLevelToFill(level: number): number {
+  if (level <= 0) return 0;
+  const db = 20 * Math.log10(Math.max(level, 1e-4));
+  return Math.max(0, Math.min(1, (db + 60) / 60));
+}
+
 export function Hud() {
   const [state, setState] = useState<RecordingState>({ status: 'recording', elapsedSec: 0 });
   const [shortcuts, setShortcuts] = useState<ShortcutSettings>(DEFAULT_SHORTCUTS);
   const [hint, setHint] = useState<string | null>(null);
   const [penColor, setPenColor] = useState<PenColor>('red');
+  const [micLevel, setMicLevel] = useState(0);
 
   // Sync the overlay's pen to the HUD's colour whenever draw mode turns on.
   useEffect(() => {
@@ -83,13 +94,63 @@ export function Hud() {
     void window.openloomInternal.getSettings().then((s) => setShortcuts(s.shortcuts));
     const offState = window.openloom.onRecordingState(setState);
     const offSettings = window.openloomInternal.onSettingsChanged((s) => setShortcuts(s.shortcuts));
+    const offMic = window.openloomInternal.onMicLevel(setMicLevel);
     return () => {
       offState();
       offSettings();
+      offMic();
     };
   }, []);
 
   const paused = state.status === 'paused';
+
+  // The redo countdown owns the window: the wider panel with the escape hatch.
+  if (state.redoCountdown != null) {
+    return (
+      <div className="hud hud-panel">
+        <p className="hud-panel-title">Back 10 seconds</p>
+        <p className="hud-panel-body">
+          Breathe. Recording carries on in <strong>{Math.max(1, state.redoCountdown)}</strong> -
+          say that last bit again.
+        </p>
+        <button
+          type="button"
+          className="hud-panel-btn"
+          onClick={() => window.openloom.cancelPendingRedo()}
+        >
+          Keep it as it was
+        </button>
+      </div>
+    );
+  }
+
+  // A destructive action is waiting on its confirm; name the cost.
+  if (state.confirm) {
+    const deleting = state.confirm === 'cancel';
+    return (
+      <div className="hud hud-panel">
+        <p className="hud-panel-title">{deleting ? 'Delete this take?' : 'Start this take over?'}</p>
+        <p className="hud-panel-body">
+          {formatElapsed(state.elapsedSec)} of footage will be discarded
+          {deleting ? '.' : ' and a fresh take starts.'} Recording carries on until you choose.
+        </p>
+        <button
+          type="button"
+          className="hud-panel-btn hud-panel-keep"
+          onClick={() => window.openloom.resolveRecordingConfirm(false)}
+        >
+          Keep recording
+        </button>
+        <button
+          type="button"
+          className="hud-panel-btn hud-panel-danger"
+          onClick={() => window.openloom.resolveRecordingConfirm(true)}
+        >
+          {deleting ? 'Delete the take' : 'Start over'}
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="hud">
@@ -120,6 +181,30 @@ export function Hud() {
             <rect x="13.6" y="5" width="3.4" height="14" rx="1.2" fill="currentColor" />
           </svg>
         )}
+      </HudButton>
+
+      <HudButton
+        label="Re-say the last 10 seconds"
+        hint="Re-say the last 10s"
+        onHint={setHint}
+        onClick={() => window.openloom.redoLastTen()}
+        disabled={paused}
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 10a8 8 0 1 0 2.3-5.6" {...stroke} />
+          <path d="M4 4v5h5" {...stroke} />
+          <text
+            x="12"
+            y="15.5"
+            textAnchor="middle"
+            fontSize="7.5"
+            fontWeight="700"
+            fill="currentColor"
+            stroke="none"
+          >
+            10
+          </text>
+        </svg>
       </HudButton>
 
       <HudButton
@@ -175,6 +260,15 @@ export function Hud() {
           {!state.micOn && <path d="M4.5 4.5 19.5 19.5" />}
         </svg>
       </HudButton>
+
+      {state.micOn && (
+        <div className="hud-mic-meter" aria-label="Microphone level">
+          <div
+            className="hud-mic-meter-fill"
+            style={{ transform: `scaleX(${micLevelToFill(micLevel)})` }}
+          />
+        </div>
+      )}
 
       <HudButton
         label={state.drawOn ? 'Stop drawing' : 'Draw on screen'}

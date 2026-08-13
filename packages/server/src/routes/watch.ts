@@ -157,10 +157,20 @@ export function watchRoutes(
     if (!video) return c.html(renderNotFoundPage(), 404);
     if (!isUnlocked(c, video)) {
       denyFraming(c);
+      // Deliberately no link-preview tags: a crawler is just another locked-out
+      // visitor, and the unfurl must not leak the title or thumbnail.
       return c.html(renderPasswordPage(video.id, embed), 403);
     }
+    // Link-preview data. thumb.jpg may not have landed yet on the processing
+    // path; the tag is only emitted once the image would actually resolve.
+    const og = {
+      title: video.title,
+      description: video.description,
+      pageUrl: `${ctx.cfg.baseUrl}/v/${video.id}`,
+      thumbUrl: fileIfExists(ctx, video, 'thumb.jpg') ? `${ctx.cfg.baseUrl}/v/${video.id}/thumb.jpg` : null,
+    };
     if (video.status !== 'ready' || !fileIfExists(ctx, video, 'video.mp4')) {
-      return c.html(renderProcessingPage(video.title, video.id, embed), 200);
+      return c.html(renderProcessingPage(video.title, video.id, embed, og), 200);
     }
     const { counts } = reactionCounts(ctx, video.id);
     return c.html(
@@ -170,6 +180,9 @@ export function watchRoutes(
         creator: video.creator,
         createdAt: video.created_at,
         durationSec: video.duration_sec,
+        description: video.description,
+        pageUrl: og.pageUrl,
+        thumbUrl: og.thumbUrl,
         allowComments: video.allow_comments === 1,
         allowReactions: video.allow_reactions === 1,
         allowDownload: video.allow_download === 1,

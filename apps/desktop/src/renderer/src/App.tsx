@@ -4,7 +4,7 @@
  * recovery banner and toasts. Recordings start from the floating launcher
  * panel (its own window, left edge of the screen).
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   Folder,
   PermissionsSnapshot,
@@ -24,7 +24,8 @@ import { SettingsView } from './views/Settings';
 export type View =
   | { name: 'library'; folderId: string | null }
   | { name: 'watch'; id: string; fresh?: boolean }
-  | { name: 'editor'; id: string }
+  // nonce remounts an already-open editor when a continuation take lands for it.
+  | { name: 'editor'; id: string; nonce?: number }
   | { name: 'settings'; pane?: string }
   | { name: 'setup' };
 
@@ -44,6 +45,18 @@ function AppInner() {
   const [recState, setRecState] = useState<RecordingState>({ status: 'idle', elapsedSec: 0 });
   const [recoverables, setRecoverables] = useState<RecoverableRecording[]>([]);
   const [booted, setBooted] = useState(false);
+  // Navigation guard: the editor reports unsaved cuts; navigating away then
+  // parks the destination here and the editor asks before it is applied.
+  const [pendingNav, setPendingNav] = useState<View | null>(null);
+  const editorDirty = useRef(false);
+  const viewRef = useRef(view);
+  viewRef.current = view;
+
+  /** Route navigation through the editor's unsaved-cuts guard. */
+  const nav = useCallback((v: View) => {
+    if (viewRef.current.name === 'editor' && editorDirty.current) setPendingNav(v);
+    else setView(v);
+  }, []);
 
   const reloadLibrary = useCallback(async () => {
     try {
@@ -98,15 +111,27 @@ function AppInner() {
       setRecState((prev) => {
         if (s.error && s.error !== prev.error) push('error', s.error);
         if (s.lastVideoId && s.lastVideoId !== prev.lastVideoId) {
-          void reloadLibrary().then(() => setView({ name: 'watch', id: s.lastVideoId!, fresh: true }));
+          const landed = s.lastVideoId;
+          // "End it here, film the rest": a landed take that a continuation was
+          // armed for routes back into the base video's editor (the nonce
+          // remounts it so the join offer shows); ordinary takes open Watch.
+          void window.openloom
+            .claimContinuationTake(landed)
+            .catch(() => null)
+            .then((claim) =>
+              reloadLibrary().then(() => {
+                if (claim) setView({ name: 'editor', id: claim.baseId, nonce: Date.now() });
+                else nav({ name: 'watch', id: landed, fresh: true });
+              })
+            );
         }
         return s;
       });
     });
-    const offNav = window.openloomInternal.onNavigate((nav) => {
-      if (nav.view === 'settings') setView({ name: 'settings' });
-      if (nav.view === 'library') setView({ name: 'library', folderId: null });
-      if (nav.view === 'new-recording') window.openloom.openLauncher();
+    const offNav = window.openloomInternal.onNavigate((n) => {
+      if (n.view === 'settings') nav({ name: 'settings' });
+      if (n.view === 'library') nav({ name: 'library', folderId: null });
+      if (n.view === 'new-recording') window.openloom.openLauncher();
     });
     const offSettings = window.openloomInternal.onSettingsChanged((s) => {
       setSettings(s);
@@ -125,7 +150,7 @@ function AppInner() {
       offToast();
       offJob();
     };
-  }, [push, reloadLibrary]);
+  }, [push, reloadLibrary, nav]);
 
   const folderCounts = useMemo(() => {
     const counts = new Map<string | null, number>();
@@ -152,7 +177,7 @@ function AppInner() {
   );
 
   if (!booted || !settings || !permissions) {
-    return <div className="boot" aria-label="Loading" />;
+    return <div className="boot" role="status" aria-label="Loading" />;
   }
 
   if (view.name === 'setup') {
@@ -189,7 +214,7 @@ function AppInner() {
           <button
             type="button"
             className={`side-item${view.name === 'library' && view.folderId === null ? ' selected' : ''}`}
-            onClick={() => setView({ name: 'library', folderId: null })}
+            onClick={() => nav({ name: 'library', folderId: null })}
           >
             <Icon.Library width={16} height={16} />
             <span>Library</span>
@@ -224,7 +249,7 @@ function AppInner() {
               key={f.id}
               type="button"
               className={`side-item${view.name === 'library' && view.folderId === f.id ? ' selected' : ''}`}
-              onClick={() => setView({ name: 'library', folderId: f.id })}
+              onClick={() => nav({ name: 'library', folderId: f.id })}
             >
               <Icon.Folder width={16} height={16} />
               <span>{f.name}</span>
@@ -237,7 +262,7 @@ function AppInner() {
           <button
             type="button"
             className={`side-item${view.name === 'settings' ? ' selected' : ''}`}
-            onClick={() => setView({ name: 'settings' })}
+            onClick={() => nav({ name: 'settings' })}
           >
             <Icon.Settings width={16} height={16} />
             <span>Settings</span>
@@ -375,6 +400,7 @@ function AppInner() {
             folders={folders}
             folderId={view.folderId}
             onOpen={(id) => setView({ name: 'watch', id })}
+            onEdit={(id) => setView({ name: 'editor', id })}
             onChanged={reloadLibrary}
             onRecord={() => window.openloom.openLauncher()}
             onOpenSharingSettings={() => setView({ name: 'settings', pane: 'sharing' })}
@@ -399,9 +425,22 @@ function AppInner() {
         )}
         {view.name === 'editor' && (
           <EditorView
+            key={`${view.id}:${view.nonce ?? 0}`}
             id={view.id}
             onBack={() => setView({ name: 'watch', id: view.id })}
             onChanged={reloadLibrary}
+            onDirtyChange={(dirty) => {
+              editorDirty.current = dirty;
+            }}
+            leaveRequested={pendingNav !== null}
+            onLeaveResolved={(leave) => {
+              const dest = pendingNav;
+              setPendingNav(null);
+              if (leave && dest) {
+                editorDirty.current = false;
+                setView(dest);
+              }
+            }}
           />
         )}
         {view.name === 'settings' && (

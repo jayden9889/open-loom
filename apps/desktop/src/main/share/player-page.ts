@@ -11,11 +11,39 @@ export interface PlayerPageOptions {
   creator?: string | null;
   createdAt: string;
   durationSec: number;
+  /** One line of context from the app's Description field, shown under the title. */
+  description?: string | null;
   chapters: { t: number; title: string }[];
   hasCaptions: boolean;
   hasThumb: boolean;
   allowDownload: boolean;
   cta?: { label: string; url: string } | null;
+  /** Absolute URL of this page, for the og:url link-preview tag. */
+  pageUrl?: string;
+  /** Absolute URL of thumb.jpg, for the og:image link-preview tag. */
+  thumbUrl?: string;
+}
+
+/**
+ * Open Graph + Twitter Card tags so a pasted link unfurls as a titled card
+ * with a picture instead of a naked URL. thumb.jpg is uploaded before the
+ * page, so the image already exists by the time a crawler can fetch this.
+ * noindex stays: unfurling is not indexing.
+ */
+function openGraphTags(opts: { title: string; description?: string | null; pageUrl?: string; thumbUrl?: string }): string {
+  const lines = [
+    `<meta property="og:title" content="${escapeHtml(opts.title)}">`,
+    `<meta property="og:type" content="video.other">`,
+    `<meta property="og:description" content="${escapeHtml(opts.description?.trim() || 'Watch this recording')}">`,
+  ];
+  if (opts.pageUrl) lines.push(`<meta property="og:url" content="${escapeHtml(opts.pageUrl)}">`);
+  if (opts.thumbUrl) {
+    lines.push(`<meta property="og:image" content="${escapeHtml(opts.thumbUrl)}">`);
+    lines.push(`<meta name="twitter:card" content="summary_large_image">`);
+  } else {
+    lines.push(`<meta name="twitter:card" content="summary">`);
+  }
+  return lines.join('\n');
 }
 
 /**
@@ -92,6 +120,7 @@ video { display: block; width: 100%; max-height: 72vh; background: #000; }
 .menu button.sel { color: var(--ol-accent); font-weight: 600; }
 h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; margin-top: 20px; }
 .byline { margin-top: 4px; color: var(--ol-text-secondary); font-size: 13px; }
+.desc { margin-top: 8px; color: var(--ol-text-secondary); font-size: 14px; white-space: pre-wrap; max-width: 70ch; }
 .actions { display: flex; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
 .btn { display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: var(--ol-radius-control); font-weight: 600; font-size: 13px; border: 1px solid var(--ol-border); background: var(--ol-surface); color: var(--ol-text); }
 .btn:hover { background: var(--ol-hover); }
@@ -238,6 +267,7 @@ export function buildPlayerPage(opts: PlayerPageOptions): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
+${openGraphTags(opts)}
 <title>${escapeHtml(opts.title)}</title>
 <style>${CSS}</style>
 </head>
@@ -267,6 +297,7 @@ export function buildPlayerPage(opts: PlayerPageOptions): string {
     </div>
     <h1>${escapeHtml(opts.title)}</h1>
     <div class="byline">${opts.creator ? `${escapeHtml(opts.creator)} · ` : ''}${escapeHtml(dateLabel)}</div>
+    ${opts.description?.trim() ? `<p class="desc">${escapeHtml(opts.description.trim())}</p>` : ''}
     <div class="actions">
       ${opts.allowDownload ? `<a class="btn" href="video.mp4" download>${DOWNLOAD}<span>Download</span></a>` : ''}
       ${opts.cta && isHttpUrl(opts.cta.url) ? `<a class="btn btn-accent" href="${escapeHtml(opts.cta.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(opts.cta.label)}</a>` : ''}
@@ -278,6 +309,44 @@ export function buildPlayerPage(opts: PlayerPageOptions): string {
 <script id="ol-data" type="application/json">${dataJson}</script>
 <script>window.OL_I=${JSON.stringify({ play: PLAY, pause: PAUSE })};</script>
 <script>${JS}</script>
+</body>
+</html>`;
+}
+
+/**
+ * Placeholder published to index.html BEFORE the media uploads start. The
+ * share URL is on the clipboard from the moment recording stops, so without
+ * this a client clicking early gets the bucket's raw NoSuchKey XML for the
+ * whole upload. A static bucket has no status endpoint to poll, so the page
+ * refreshes itself until the real player page overwrites this object.
+ */
+export function buildProcessingPage(opts: { title: string; pageUrl?: string; thumbUrl?: string }): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<meta http-equiv="refresh" content="10">
+${openGraphTags(opts)}
+<title>${escapeHtml(opts.title)}</title>
+<style>${CSS}
+.center-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
+.center-card { background: var(--ol-surface); border: 1px solid var(--ol-border); border-radius: var(--ol-radius-card); box-shadow: var(--ol-elev-card); padding: 40px 36px; max-width: 400px; width: 100%; text-align: center; }
+.center-card h1 { font-size: 18px; margin: 14px 0 6px; }
+.center-card p { color: var(--ol-text-secondary); font-size: 13px; }
+.spin { width: 28px; height: 28px; border-radius: 999px; border: 3px solid var(--ol-accent-soft); border-top-color: var(--ol-accent); animation: olspin 0.9s linear infinite; margin: 0 auto; }
+@keyframes olspin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="center-wrap">
+  <div class="center-card">
+    <div class="spin" role="status" aria-label="Uploading"></div>
+    <h1>${escapeHtml(opts.title)}</h1>
+    <p>This video is still uploading. The page refreshes itself until it is ready.</p>
+  </div>
+</div>
 </body>
 </html>`;
 }

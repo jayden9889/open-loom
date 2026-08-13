@@ -45,6 +45,10 @@ const api: OpenLoomAPI = {
   stopRecording: () => ipcRenderer.invoke('ol:stopRecording'),
   cancelRecording: () => ipcRenderer.invoke('ol:cancelRecording'),
   restartRecording: () => ipcRenderer.invoke('ol:restartRecording'),
+  redoLastTen: () => ipcRenderer.send('ol:redoLastTen'),
+  cancelPendingRedo: () => ipcRenderer.send('ol:cancelPendingRedo'),
+  resolveRecordingConfirm: (confirmed: boolean) =>
+    ipcRenderer.send('ol:resolveRecordingConfirm', confirmed),
   onRecordingState: subscribe<RecordingState>('ol:recording-state'),
   toggleCamera: (on: boolean) => ipcRenderer.send('ol:toggleCamera', on),
   toggleMic: (on: boolean) => ipcRenderer.send('ol:toggleMic', on),
@@ -58,7 +62,7 @@ const api: OpenLoomAPI = {
   listVideos: () => ipcRenderer.invoke('ol:listVideos'),
   getVideo: (id: string) => ipcRenderer.invoke('ol:getVideo', id),
   updateVideo: (id: string, patch: Partial<VideoMeta>) => ipcRenderer.invoke('ol:updateVideo', id, patch),
-  deleteVideo: (id: string) => ipcRenderer.invoke('ol:deleteVideo', id),
+  deleteVideo: (id: string, opts?: { force?: boolean }) => ipcRenderer.invoke('ol:deleteVideo', id, opts),
   duplicateVideo: (id: string) => ipcRenderer.invoke('ol:duplicateVideo', id),
   revealVideo: (id: string) => ipcRenderer.send('ol:revealVideo', id),
   regeneratePreviews: (id: string) => ipcRenderer.invoke('ol:regeneratePreviews', id),
@@ -76,8 +80,14 @@ const api: OpenLoomAPI = {
   // editor
   trimVideo: (id: string, ranges: { start: number; end: number }[]) =>
     ipcRenderer.invoke('ol:trimVideo', id, ranges),
-  stitchVideos: (id: string, appendId: string) => ipcRenderer.invoke('ol:stitchVideos', id, appendId),
+  stitchVideos: (id: string, appendId: string, appendRange?: { start: number; end: number }) =>
+    ipcRenderer.invoke('ol:stitchVideos', id, appendId, appendRange),
   detectSilences: (id: string) => ipcRenderer.invoke('ol:detectSilences', id),
+  cancelEditJob: (id: string) => ipcRenderer.invoke('ol:cancelEditJob', id),
+  beginContinuation: (id: string) => ipcRenderer.invoke('ol:beginContinuation', id),
+  cancelContinuation: () => ipcRenderer.invoke('ol:cancelContinuation'),
+  dismissContinuation: (id: string) => ipcRenderer.invoke('ol:dismissContinuation', id),
+  claimContinuationTake: (takeId: string) => ipcRenderer.invoke('ol:claimContinuationTake', takeId),
   onJobProgress: subscribe<JobProgress>('ol:job-progress'),
 
   // transcribe + AI
@@ -147,11 +157,13 @@ const internal: OpenLoomInternal = {
   onSettingsChanged: subscribe<Settings>('ol:settings-changed'),
   onNavigate: subscribe<{ view: string; mode?: string }>('ol:navigate'),
   onToast: subscribe<{ kind: 'info' | 'success' | 'error'; text: string }>('ol:toast'),
+  onMicLevel: subscribe<number>('ol:mic-level'),
 
   engineReady: () => ipcRenderer.send('engine:ready'),
   engineStarted: (mimeType: string) => ipcRenderer.send('engine:started', { mimeType }),
   engineStopped: () => ipcRenderer.send('engine:stopped'),
   engineError: (message: string) => ipcRenderer.send('engine:error', message),
+  engineMicLevel: (level: number) => ipcRenderer.send('engine:mic-level', level),
   sendChunk: (chunk: Uint8Array) => ipcRenderer.send('engine:chunk', chunk),
   onEngineBegin: subscribe<EngineBeginPayload>('engine:begin'),
   onEngineStop: subscribeVoid('engine:stop'),
@@ -167,6 +179,8 @@ const internal: OpenLoomInternal = {
 
   countdownDone: () => ipcRenderer.send('countdown:done'),
   countdownCancel: () => ipcRenderer.send('countdown:cancel'),
+
+  onNotesText: subscribe<string>('notes:set-text'),
 
   onDrawEnable: subscribe<boolean>('draw:enable'),
   onDrawRipple: subscribe<{ x: number; y: number }>('draw:ripple'),

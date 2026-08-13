@@ -1,20 +1,23 @@
 /**
  * Editor view (SPEC E1-E4): timeline with filmstrip frames + audio waveform,
- * draggable in/out trim handles, split markers with delete-middle, Add clip
- * (stitch another library video), non-destructive skip preview, and Save that
- * runs the ffmpeg edit jobs (lossless cut vs precise re-encode chosen
- * automatically and surfaced in the progress note). The original stays banked
- * as video.orig.mp4 until the user keeps or reverts the edit.
+ * draggable in/out trim handles, split markers with delete-middle, drag-to-cut
+ * (drag across a part, one button removes it), Add clip (stitch another
+ * library video), "End it here, film the rest" (trim at the playhead, record a
+ * matching continuation take, offer the join when it lands), non-destructive
+ * skip preview, and Save that runs the ffmpeg edit jobs (lossless cut vs
+ * precise re-encode chosen automatically and surfaced in the progress note).
+ * The original stays banked as video.orig.mp4 until the user keeps or reverts.
  *
- * Timeline model: click or drag anywhere scrubs the playhead and selects the
- * section under it; Split cuts at the playhead; Remove/Restore act on the
- * selection; Cut quiet parts marks detected silences as removed. Everything is
- * non-destructive until Save, and every change can be undone (Cmd/Ctrl+Z).
+ * Timeline model: click scrubs the playhead and selects the section under it;
+ * dragging paints a removal range; Split cuts at the playhead; Remove/Restore
+ * act on the selection; Cut quiet parts marks detected silences as removed.
+ * Everything is non-destructive until Save (Cmd/Ctrl+S), every change can be
+ * undone (Cmd/Ctrl+Z), and leaving with unsaved cuts asks first.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { JobProgress, VideoMeta } from '@shared/types';
 import { Icon } from '../components/icons';
-import { Modal, cleanIpcError, formatDuration, useToasts } from '../components/ui';
+import { Modal, cleanIpcError, formatBytes, formatDuration, useToasts } from '../components/ui';
 
 interface Seg {
   start: number;
@@ -72,6 +75,101 @@ export function mergeAdjacent(segs: Seg[]): Seg[] {
   return out;
 }
 
+/**
+ * Re-place a trim edge at time t (pure core of the handle drag and of "End it
+ * here"). The handle re-places its own boundary, so it has to move both ways:
+ * cutting straight from the current segments made every drag additive - an
+ * already removed head just got split, never shrunk. Restore this edge's own
+ * removed run first, then cut at the new position. Interior removed sections,
+ * which belong to split/remove, are left alone. Returns the input unchanged
+ * when the move would leave nothing kept.
+ */
+export function trimEdgeAt(prevRaw: Seg[], edge: 'in' | 'out', t: number, duration: number): Seg[] {
+  const prev = restoreEdgeRun(prevRaw, edge);
+  const dur = prev.length > 0 ? prev[prev.length - 1]!.end : duration;
+  const clamped = Math.max(0, Math.min(t, dur));
+  const out: Seg[] = [];
+  if (edge === 'in') {
+    if (clamped > MIN_SEG) out.push({ start: 0, end: clamped, kept: false });
+    for (const s of prev) {
+      if (s.end <= clamped) continue;
+      const start = Math.max(s.start, clamped);
+      if (s.end - start < 0.01) continue;
+      out.push({ start, end: s.end, kept: s.kept });
+    }
+    if (out.every((s) => !s.kept)) return prevRaw;
+  } else {
+    for (const s of prev) {
+      if (s.start >= clamped) continue;
+      const end = Math.min(s.end, clamped);
+      if (end - s.start < 0.01) continue;
+      out.push({ start: s.start, end, kept: s.kept });
+    }
+    if (clamped < dur - MIN_SEG) out.push({ start: clamped, end: dur, kept: false });
+    if (out.every((s) => !s.kept)) return prevRaw;
+  }
+  return mergeAdjacent(out);
+}
+
+/**
+ * Remove [start, end] from the kept timeline in one step: the drag-to-cut
+ * equivalent of split + split + remove-middle. Only kept segments are touched,
+ * so existing cuts survive. Null when the range removes nothing, or when the
+ * cut would leave less than MIN_SEG of video.
+ */
+export function cutRange(
+  segs: Seg[],
+  start: number,
+  end: number
+): { segs: Seg[]; removedSec: number } | null {
+  if (end - start < 0.01) return null;
+  const next: Seg[] = [];
+  let cut = false;
+  for (const s of segs) {
+    if (!s.kept || s.end <= start || s.start >= end) {
+      next.push({ ...s });
+      continue;
+    }
+    const a = Math.max(s.start, start);
+    const b = Math.min(s.end, end);
+    if (b - a < 0.01) {
+      next.push({ ...s });
+      continue;
+    }
+    cut = true;
+    if (a - s.start > 0.001) next.push({ start: s.start, end: a, kept: true });
+    next.push({ start: a, end: b, kept: false });
+    if (s.end - b > 0.001) next.push({ start: b, end: s.end, kept: true });
+  }
+  if (!cut) return null;
+  const merged = mergeAdjacent(next);
+  if (totalKept(merged) < MIN_SEG) return null;
+  return { segs: merged, removedSec: totalKept(segs) - totalKept(merged) };
+}
+
+/** True when the kept ranges differ from the untouched full-length video. */
+export function rangesEdited(ranges: { start: number; end: number }[], duration: number): boolean {
+  return (
+    ranges.length > 1 ||
+    (ranges.length === 1 && (ranges[0]!.start > 0.01 || ranges[0]!.end < duration - 0.01))
+  );
+}
+
+/**
+ * Plain-English summary of the accumulated edits, so the keep/revert surfaces
+ * can say what they act on instead of "this edit".
+ */
+export function describeEdits(history?: { kind: 'trim' | 'stitch' }[]): string {
+  const trims = history?.filter((h) => h.kind === 'trim').length ?? 0;
+  const stitches = history?.filter((h) => h.kind === 'stitch').length ?? 0;
+  const parts: string[] = [];
+  if (trims === 1) parts.push('a trim');
+  else if (trims > 1) parts.push(`${trims} trims`);
+  if (stitches === 1) parts.push('an added clip');
+  else if (stitches > 1) parts.push(`${stitches} added clips`);
+  return parts.length > 0 ? parts.join(' and ') : 'your changes';
+}
+
 /** Breathing room kept around speech when cutting a quiet stretch, so words are not clipped. */
 export const SILENCE_PAD = 0.18;
 /** A quiet stretch must still be at least this long after padding to be worth cutting. */
@@ -124,25 +222,40 @@ export function cutQuietParts(
 
 const FILMSTRIP_FRAMES = 14;
 
+/** Drags shorter than this many pixels count as clicks, not range selections. */
+const DRAG_THRESHOLD_PX = 5;
+/** A painted range shorter than this is discarded on release (accidental wiggle). */
+const MIN_RANGE_SEC = 0.2;
+
 export function EditorView({
   id,
   onBack,
   onChanged,
+  onDirtyChange,
+  leaveRequested,
+  onLeaveResolved,
 }: {
   id: string;
   onBack: () => void;
   onChanged: () => Promise<void>;
+  /** Reports whether unsaved cuts exist, so the shell can guard navigation. */
+  onDirtyChange?: (dirty: boolean) => void;
+  /** The shell wants to navigate away; the editor confirms or waves it through. */
+  leaveRequested?: boolean;
+  onLeaveResolved?: (leave: boolean) => void;
 }) {
   const { push } = useToasts();
   const [meta, setMeta] = useState<VideoMeta | null>(null);
   const [segs, setSegs] = useState<Seg[]>([]);
   const [selected, setSelected] = useState<number | null>(null);
+  const [rangeSel, setRangeSel] = useState<{ start: number; end: number } | null>(null);
   const [frames, setFrames] = useState<string[]>([]);
   const [peaks, setPeaks] = useState<number[]>([]);
   const [current, setCurrent] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [job, setJob] = useState<JobProgress | null>(null);
   const [busy, setBusy] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [libraryVideos, setLibraryVideos] = useState<VideoMeta[]>([]);
   const [savedBanner, setSavedBanner] = useState(false);
@@ -150,6 +263,15 @@ export function EditorView({
   const [videoReady, setVideoReady] = useState(false);
   const [history, setHistory] = useState<Seg[][]>([]);
   const [detecting, setDetecting] = useState(false);
+  // 'back' = the editor's own Back button, 'nav' = the shell asked to leave,
+  // 'close' = the window is closing. All three show the same unsaved-cuts modal.
+  const [confirmLeave, setConfirmLeave] = useState<'back' | 'nav' | 'close' | null>(null);
+  const [confirmAction, setConfirmAction] = useState<'keep' | 'revert' | null>(null);
+  // A continuation is armed: the next recording comes back here to be joined.
+  const [armed, setArmed] = useState(false);
+  // Metadata of the recorded continuation take, once one is waiting.
+  const [take, setTake] = useState<VideoMeta | null>(null);
+  const [updatingShare, setUpdatingShare] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
@@ -176,6 +298,7 @@ export function EditorView({
   const resetSegs = useCallback((dur: number) => {
     setSegs([{ start: 0, end: dur, kept: true }]);
     setSelected(null);
+    setRangeSel(null);
     setHistory([]);
   }, []);
 
@@ -189,6 +312,31 @@ export function EditorView({
   useEffect(() => {
     void loadMeta().catch((err) => push('error', cleanIpcError(err)));
   }, [loadMeta, push]);
+
+  // The waiting continuation take, when there is one. A take that has been
+  // deleted from the library clears the offer rather than dangling forever.
+  useEffect(() => {
+    const takeId = meta?.continuation?.takeId;
+    if (!takeId) {
+      setTake(null);
+      return;
+    }
+    let cancelled = false;
+    window.openloom.getVideo(takeId).then(
+      (m) => {
+        if (!cancelled) setTake(m);
+      },
+      () => {
+        if (!cancelled) {
+          setTake(null);
+          void window.openloom.dismissContinuation(id).catch(() => undefined);
+        }
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [meta?.continuation?.takeId, id]);
 
   // Waveform peaks (reuses the processing-time waveform.json).
   useEffect(() => {
@@ -409,9 +557,22 @@ export function EditorView({
   onKeyRef.current = (e: KeyboardEvent) => {
     const target = e.target as HTMLElement;
     if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return;
+    if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S')) {
+      // The save keystroke everyone presses must save, never drop a split.
+      e.preventDefault();
+      void save();
+      return;
+    }
     if ((e.metaKey || e.ctrlKey) && (e.key === 'z' || e.key === 'Z')) {
       e.preventDefault();
       undo();
+      return;
+    }
+    // No other modified key means anything here; without this guard Cmd+S used
+    // to fall through to the bare-key branches and split at the playhead.
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === 'Escape' && rangeSel) {
+      setRangeSel(null);
       return;
     }
     if (e.key === ' ') {
@@ -419,9 +580,12 @@ export function EditorView({
       togglePlay();
     }
     if (e.key === 's' || e.key === 'S') splitAtPlayhead();
-    if ((e.key === 'Backspace' || e.key === 'Delete') && selected !== null) {
-      if (segs[selected]?.kept) removeSegment(selected);
-      else restoreSegment(selected);
+    if (e.key === 'Backspace' || e.key === 'Delete') {
+      if (rangeSel) cutSelectedRange();
+      else if (selected !== null) {
+        if (segs[selected]?.kept) removeSegment(selected);
+        else restoreSegment(selected);
+      }
     }
     // Nudge the playhead for precise cuts; trim handles keep their own arrows.
     if (!target.closest?.('.tl-handle')) {
@@ -442,6 +606,7 @@ export function EditorView({
     setHistory((h) => [...h.slice(-49), segs]);
     setSegs(next);
     setSelected(null);
+    setRangeSel(null);
   };
 
   const undo = useCallback(() => {
@@ -450,6 +615,7 @@ export function EditorView({
       if (prev) {
         setSegs(prev);
         setSelected(null);
+        setRangeSel(null);
       }
       return h.slice(0, -1);
     });
@@ -479,6 +645,18 @@ export function EditorView({
     applySegs(segs.map((s, idx) => (idx === i ? { ...s, kept: true } : s)));
   };
 
+  /** Remove the drag-painted range in one go (split + split + remove, as one action). */
+  const cutSelectedRange = () => {
+    if (!rangeSel) return;
+    const result = cutRange(segs, rangeSel.start, rangeSel.end);
+    if (!result) {
+      push('error', 'At least one section must remain.');
+      return;
+    }
+    applySegs(result.segs);
+    seek(rangeSel.start);
+  };
+
   /** Detect silences in the audio and mark them as removed sections (non-destructive). */
   const cutSilences = async () => {
     if (detecting || busy) return;
@@ -502,43 +680,9 @@ export function EditorView({
     }
   };
 
-  /**
-   * Trim handles: everything before/after t becomes a removed section.
-   *
-   * The handle re-places its own boundary, so it has to move both ways. Cutting
-   * straight from the current segments made every drag additive - an already
-   * removed head just got split, never shrunk, so dragging a handle back to
-   * widen the keep-range (or nudging it with an arrow key) did nothing at all.
-   * Restore this edge's own removed run first, then cut at the new position.
-   * Interior removed sections, which belong to split/remove, are left alone.
-   */
+  /** Trim handles: everything before/after t becomes a removed section. */
   const applyTrim = (edge: 'in' | 'out', t: number) => {
-    setSegs((prevRaw) => {
-      const prev = restoreEdgeRun(prevRaw, edge);
-      const dur = prev.length > 0 ? prev[prev.length - 1]!.end : duration;
-      const clamped = Math.max(0, Math.min(t, dur));
-      const out: Seg[] = [];
-      if (edge === 'in') {
-        if (clamped > MIN_SEG) out.push({ start: 0, end: clamped, kept: false });
-        for (const s of prev) {
-          if (s.end <= clamped) continue;
-          const start = Math.max(s.start, clamped);
-          if (s.end - start < 0.01) continue;
-          out.push({ start, end: s.end, kept: s.kept });
-        }
-        if (out.every((s) => !s.kept)) return prevRaw;
-      } else {
-        for (const s of prev) {
-          if (s.start >= clamped) continue;
-          const end = Math.min(s.end, clamped);
-          if (end - s.start < 0.01) continue;
-          out.push({ start: s.start, end, kept: s.kept });
-        }
-        if (clamped < dur - MIN_SEG) out.push({ start: clamped, end: dur, kept: false });
-        if (out.every((s) => !s.kept)) return prevRaw;
-      }
-      return mergeAdjacent(out);
-    });
+    setSegs((prevRaw) => trimEdgeAt(prevRaw, edge, t, duration));
   };
 
   const trimIn = keptRanges[0]?.start ?? 0;
@@ -585,22 +729,33 @@ export function EditorView({
   };
 
   /**
-   * Click or drag anywhere on the timeline to scrub. The section under the
-   * pointer becomes the selection, so cut-then-remove is: click, S, click, Remove.
+   * Click to scrub (the section under the pointer becomes the selection); drag
+   * to paint a removal range across the bad part. The drag also scrubs as it
+   * goes, so the preview shows the frame under the pointer either way.
    */
   const scrubTimeline = (downEvent: React.PointerEvent) => {
     if ((downEvent.target as HTMLElement).closest('.tl-handle')) return;
-    const selectAt = (clientX: number) => {
-      const t = timeAtClientX(clientX);
+    const anchorX = downEvent.clientX;
+    const anchorT = timeAtClientX(anchorX);
+    let dragged = false;
+    seek(anchorT);
+    const idx = segs.findIndex((s) => anchorT >= s.start && anchorT < s.end);
+    setSelected(idx >= 0 ? idx : null);
+    const move = (e: PointerEvent) => {
+      if (!dragged && Math.abs(e.clientX - anchorX) < DRAG_THRESHOLD_PX) return;
+      if (!dragged) {
+        dragged = true;
+        setSelected(null);
+      }
+      const t = timeAtClientX(e.clientX);
       seek(t);
-      const idx = segs.findIndex((s) => t >= s.start && t < s.end);
-      setSelected(idx >= 0 ? idx : null);
+      setRangeSel({ start: Math.min(anchorT, t), end: Math.max(anchorT, t) });
     };
-    selectAt(downEvent.clientX);
-    const move = (e: PointerEvent) => selectAt(e.clientX);
     const up = () => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
+      if (!dragged) setRangeSel(null);
+      else setRangeSel((r) => (r && r.end - r.start >= MIN_RANGE_SEC ? r : null));
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
@@ -608,12 +763,40 @@ export function EditorView({
 
   // --- actions ----------------------------------------------------------------
 
-  const isEdited =
-    keptRanges.length > 1 ||
-    (keptRanges.length === 1 && (keptRanges[0]!.start > 0.01 || keptRanges[0]!.end < duration - 0.01));
+  const isEdited = rangesEdited(keptRanges, duration);
 
-  const save = async () => {
-    if (!isEdited || busy) return;
+  // Let the shell guard sidebar navigation while cuts are unsaved.
+  useEffect(() => {
+    onDirtyChange?.(isEdited);
+  }, [isEdited, onDirtyChange]);
+  useEffect(() => {
+    return () => onDirtyChange?.(false);
+  }, [onDirtyChange]);
+
+  // The shell asked to leave (sidebar click, new-recording navigation).
+  useEffect(() => {
+    if (!leaveRequested) return;
+    if (isEdited) setConfirmLeave('nav');
+    else onLeaveResolved?.(true);
+    // Deliberately keyed on the request alone: the dirty state at request time decides.
+  }, [leaveRequested]);
+
+  // Closing the window with unsaved cuts gets the same modal as any other exit.
+  const isEditedRef = useRef(isEdited);
+  isEditedRef.current = isEdited;
+  const allowUnload = useRef(false);
+  useEffect(() => {
+    const h = (e: BeforeUnloadEvent) => {
+      if (!isEditedRef.current || allowUnload.current) return;
+      e.preventDefault();
+      setConfirmLeave('close');
+    };
+    window.addEventListener('beforeunload', h);
+    return () => window.removeEventListener('beforeunload', h);
+  }, []);
+
+  const save = async (): Promise<boolean> => {
+    if (!isEdited || busy) return true;
     setBusy(true);
     videoRef.current?.pause();
     try {
@@ -624,18 +807,37 @@ export function EditorView({
       setSavedBanner(true);
       await onChanged();
       push('success', `Saved. New length ${formatDuration(m.durationSec)}.`);
+      return true;
     } catch (err) {
-      push('error', cleanIpcError(err));
+      const msg = cleanIpcError(err);
+      if (/cancelled/i.test(msg)) push('info', 'Cancelled. Your video is exactly as it was.');
+      else push('error', msg);
+      return false;
     } finally {
       setBusy(false);
       setJob(null);
+      setCancelling(false);
+    }
+  };
+
+  /** Leave via whichever exit triggered the unsaved-cuts modal. */
+  const leaveTo = (kind: 'back' | 'nav' | 'close') => {
+    if (kind === 'back') onBack();
+    else if (kind === 'nav') onLeaveResolved?.(true);
+    else {
+      allowUnload.current = true;
+      window.close();
     }
   };
 
   const openAddClip = async () => {
     try {
       const all = await window.openloom.listVideos();
-      setLibraryVideos(all.filter((v) => v.id !== id));
+      setLibraryVideos(
+        all
+          .filter((v) => v.id !== id && !v.missing)
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      );
       setAddOpen(true);
     } catch (err) {
       push('error', cleanIpcError(err));
@@ -654,14 +856,18 @@ export function EditorView({
       await onChanged();
       push('success', `Clip added. New length ${formatDuration(m.durationSec)}.`);
     } catch (err) {
-      push('error', cleanIpcError(err));
+      const msg = cleanIpcError(err);
+      if (/cancelled/i.test(msg)) push('info', 'Cancelled. Your video is exactly as it was.');
+      else push('error', msg);
     } finally {
       setBusy(false);
       setJob(null);
+      setCancelling(false);
     }
   };
 
   const revert = async () => {
+    setConfirmAction(null);
     setBusy(true);
     videoRef.current?.pause();
     try {
@@ -680,67 +886,239 @@ export function EditorView({
   };
 
   const keepEdit = async () => {
+    setConfirmAction(null);
     try {
       await window.openloom.confirmEdits(id);
       await loadMeta();
       setSavedBanner(false);
-      push('success', 'Edit kept. The original file was removed.');
+      push('success', 'Done. The original recording is in the Trash if you ever need it back.');
     } catch (err) {
       push('error', cleanIpcError(err));
     }
   };
 
-  const retranscribe = () => {
-    void window.openloom.transcribeVideo(id).then(
-      () => push('success', 'Transcript updated for the edited video.'),
-      (err) => push('error', cleanIpcError(err))
-    );
-    push('info', 'Re-running transcription in the background.');
+  /** Stop the running trim/stitch. Safe: edits land in a temp file until they finish. */
+  const cancelRunningJob = () => {
+    setCancelling(true);
+    void window.openloom.cancelEditJob(id).catch(() => undefined);
+  };
+
+  /**
+   * "End it here, film the rest": trim off everything after the playhead (the
+   * original stays banked), then arm a continuation and open the launcher set
+   * up like the first take. The recording that lands next comes straight back
+   * to this editor to be joined on. Repeatable for take 3, take 4, and so on.
+   */
+  const endHereAndFilmRest = async () => {
+    if (busy) return;
+    videoRef.current?.pause();
+    const t = videoRef.current?.currentTime ?? current;
+    const cutsTail = t > trimIn + MIN_SEG && t < trimOut - MIN_SEG;
+    const next = cutsTail ? trimEdgeAt(segs, 'out', t, duration) : segs;
+    const ranges = mergeKept(next);
+    setBusy(true);
+    try {
+      if (rangesEdited(ranges, duration)) {
+        await window.openloom.trimVideo(id, ranges.map((r) => ({ start: r.start, end: r.end })));
+        await loadMeta();
+        setFileVersion((v) => v + 1);
+        setCurrent(0);
+        setSavedBanner(true);
+        await onChanged();
+      }
+      await window.openloom.beginContinuation(id);
+      setArmed(true);
+      window.openloom.openLauncher();
+      push(
+        'info',
+        cutsTail
+          ? `Ended at ${formatDuration(t)}. Record the rest now - it comes back here to be joined on.`
+          : 'Record the rest now - it comes back here to be joined on.'
+      );
+    } catch (err) {
+      const msg = cleanIpcError(err);
+      if (/cancelled/i.test(msg)) push('info', 'Cancelled. Your video is exactly as it was.');
+      else push('error', msg);
+    } finally {
+      setBusy(false);
+      setJob(null);
+      setCancelling(false);
+    }
+  };
+
+  const cancelArmed = () => {
+    void window.openloom.cancelContinuation().catch(() => undefined);
+    setArmed(false);
+  };
+
+  // Backing out of the editor disarms a waiting continuation, unless a
+  // recording is actually underway - then the take must still find its way
+  // back. Also runs on the remount after a take is claimed, where the intent
+  // is already consumed and the cancel is a harmless no-op.
+  const armedRef = useRef(armed);
+  armedRef.current = armed;
+  useEffect(() => {
+    return () => {
+      if (!armedRef.current) return;
+      void window.openloomInternal.getRecordingState().then(
+        (s) => {
+          if (s.status === 'idle') void window.openloom.cancelContinuation().catch(() => undefined);
+        },
+        () => undefined
+      );
+    };
+  }, []);
+
+  const dismissTake = async () => {
+    try {
+      await window.openloom.dismissContinuation(id);
+      setTake(null);
+      const m = await window.openloom.getVideo(id);
+      setMeta(m);
+      push('info', 'Kept as its own recording in your library.');
+    } catch (err) {
+      push('error', cleanIpcError(err));
+    }
+  };
+
+  /** Re-upload the edited file so the link people already have shows the new cut. */
+  const updateShareLink = async () => {
+    if (updatingShare) return;
+    setUpdatingShare(true);
+    push('info', 'Updating the link in the background. You can keep working.');
+    try {
+      await window.openloom.shareVideo(id);
+      const m = await window.openloom.getVideo(id);
+      setMeta(m);
+      push('success', 'The link now shows the latest version.');
+    } catch (err) {
+      push('error', cleanIpcError(err));
+    } finally {
+      setUpdatingShare(false);
+    }
   };
 
   if (!meta) return <div className="boot" />;
 
   const hasBankedOriginal = Boolean(meta.edits?.trimmedFrom);
+  const editCount = meta.edits?.history?.length ?? 0;
+  const editSummary = describeEdits(meta.edits?.history);
+  const origDur = meta.edits?.originalDurationSec;
+  const origSize = meta.edits?.originalSizeBytes;
+  const origLabel = [
+    origDur ? formatDuration(origDur) : null,
+    origSize ? formatBytes(origSize) : null,
+  ]
+    .filter(Boolean)
+    .join(', ');
   const pct = (t: number) => `${(t / Math.max(duration, 0.01)) * 100}%`;
 
   return (
     <div className="editor">
       <header className="view-head watch-head">
-        <button type="button" className="icon-btn" aria-label="Back to video" onClick={onBack}>
+        <button
+          type="button"
+          className="icon-btn"
+          aria-label="Back to video"
+          onClick={() => {
+            if (isEdited) setConfirmLeave('back');
+            else onBack();
+          }}
+        >
           <Icon.Back width={17} height={17} />
         </button>
         <h2 className="editor-title">
           Edit <span className="editor-title-name">{meta.title}</span>
+          {meta.share && <span className="badge badge-shared">Shared</span>}
         </h2>
         <div className="watch-head-actions">
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => void endHereAndFilmRest()}
+            disabled={busy || armed || Boolean(meta.continuation)}
+            title="Trim off everything after the playhead, then record a new take that joins on the end"
+          >
+            <Icon.Record width={15} height={15} />
+            End it here, film the rest
+          </button>
           <button type="button" className="btn-secondary" onClick={() => void openAddClip()} disabled={busy}>
             <Icon.Plus width={15} height={15} />
             Add clip
           </button>
-          <button type="button" className="btn-primary" onClick={() => void save()} disabled={!isEdited || busy}>
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={() => void save()}
+            disabled={!isEdited || busy}
+            title={isEdited ? 'Save your cuts (Cmd+S)' : 'Make a cut first - nothing has changed yet'}
+          >
             <Icon.Check width={15} height={15} />
             Save edit
           </button>
         </div>
       </header>
 
+      {armed && !meta.continuation && !busy && (
+        <div className="edit-banner">
+          <Icon.Record width={15} height={15} />
+          <span>
+            Ready for the rest: record it with the panel on the left of your screen. When you stop, the
+            new take lands back here to be joined on.
+          </span>
+          <button type="button" className="btn-secondary" onClick={cancelArmed}>
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {meta.continuation && take && !busy && (
+        <div className="edit-banner">
+          <Icon.Record width={15} height={15} />
+          <span>
+            Your new take is ready ({formatDuration(take.durationSec)}). Add it to the end of this
+            video?
+          </span>
+          <button type="button" className="btn-secondary" onClick={() => void dismissTake()}>
+            Keep it separate
+          </button>
+          <button type="button" className="btn-primary" onClick={() => void addClip(take.id)}>
+            Add it to the end
+          </button>
+        </div>
+      )}
+
       {(savedBanner || hasBankedOriginal) && !busy && (
         <div className="edit-banner">
           <Icon.Clock width={15} height={15} />
           <span>
-            The original video is kept until you decide. Keep this edit, or restore the original.
+            {editCount > 0
+              ? `${editCount === 1 ? '1 change' : `${editCount} changes`} so far (${editSummary}). Your original recording${origLabel ? ` (${origLabel})` : ''} is kept safe until you decide.`
+              : 'Your original recording is kept safe until you decide.'}
           </span>
-          {meta.transcript && (
-            <button type="button" className="btn-secondary" onClick={retranscribe}>
-              Update transcript
-            </button>
-          )}
-          <button type="button" className="btn-secondary" onClick={() => void revert()}>
+          <button type="button" className="btn-secondary" onClick={() => setConfirmAction('revert')}>
             <Icon.Undo width={14} height={14} />
-            Revert
+            Go back to the original
           </button>
-          <button type="button" className="btn-primary" onClick={() => void keepEdit()}>
-            Keep edit
+          <button type="button" className="btn-primary" onClick={() => setConfirmAction('keep')}>
+            Keep these changes
+          </button>
+        </div>
+      )}
+
+      {meta.share && (savedBanner || hasBankedOriginal) && !busy && (
+        <div className="edit-banner">
+          <Icon.Link width={15} height={15} />
+          <span>
+            This video is shared. Anyone with the link still sees the version from before your changes.
+          </span>
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={() => void updateShareLink()}
+            disabled={updatingShare}
+          >
+            {updatingShare ? 'Updating…' : 'Update the link'}
           </button>
         </div>
       )}
@@ -807,8 +1185,10 @@ export function EditorView({
           <Icon.Undo width={15} height={15} />
         </button>
         <div className="controls-spacer" />
-        <span className="editor-result-len" title="Length after this edit">
-          Result: {formatDuration(totalKept(segs))}
+        <span className="editor-result-len" title="Length before and after this edit">
+          {isEdited
+            ? `${formatDuration(duration)} becomes ${formatDuration(totalKept(segs))}`
+            : `Length ${formatDuration(duration)}`}
         </span>
         <button
           type="button"
@@ -824,7 +1204,17 @@ export function EditorView({
           <Icon.Split width={15} height={15} />
           Split
         </button>
-        {selected !== null && segs[selected] && !segs[selected]!.kept ? (
+        {rangeSel ? (
+          <button
+            type="button"
+            className="btn-danger-quiet"
+            onClick={cutSelectedRange}
+            title="Remove the highlighted part (Delete)"
+          >
+            <Icon.Scissors width={15} height={15} />
+            Cut this out ({formatDuration(rangeSel.end - rangeSel.start)})
+          </button>
+        ) : selected !== null && segs[selected] && !segs[selected]!.kept ? (
           <button
             type="button"
             className="btn-secondary"
@@ -840,7 +1230,11 @@ export function EditorView({
             className="btn-danger-quiet"
             disabled={selected === null || !segs[selected]?.kept}
             onClick={() => selected !== null && removeSegment(selected)}
-            title="Remove the selected section (Delete)"
+            title={
+              selected === null || !segs[selected]?.kept
+                ? 'Drag across the part you want gone, or click a section first'
+                : 'Remove the selected section (Delete)'
+            }
           >
             <Icon.Trash width={15} height={15} />
             Remove section
@@ -880,6 +1274,26 @@ export function EditorView({
             />
           ))}
         </div>
+
+        {/* drag-painted removal range. Solid fill + edge borders, deliberately
+            in the danger colour: this is the part that goes. */}
+        {rangeSel && (
+          <div
+            className="tl-rangesel"
+            aria-hidden="true"
+            style={{
+              position: 'absolute',
+              top: 0,
+              bottom: 0,
+              left: pct(rangeSel.start),
+              width: pct(rangeSel.end - rangeSel.start),
+              background: 'rgba(255, 69, 58, 0.18)',
+              borderLeft: '2px solid var(--ol-danger)',
+              borderRight: '2px solid var(--ol-danger)',
+              pointerEvents: 'none',
+            }}
+          />
+        )}
 
         {/* split markers */}
         {segs.slice(1).map((s) =>
@@ -930,9 +1344,9 @@ export function EditorView({
       </div>
 
       <p className="editor-hint">
-        Click anywhere on the timeline to move the playhead (arrow keys nudge it). Press S to split there, then
-        Remove the part you do not want - click a removed part to bring it back with Restore. Drag the handles to
-        trim the ends. Nothing touches the file until you press Save, and Cmd+Z undoes any step.
+        Drag across a part you do not want, then press Cut this out. Click to move the playhead; drag
+        the handles to trim the ends. Nothing touches the file until you save (Cmd+S), and Cmd+Z undoes
+        any step.
       </p>
 
       {(busy || job) && (
@@ -940,13 +1354,113 @@ export function EditorView({
           <div className="job-card">
             <span className="spinner" aria-hidden="true" />
             <div className="job-text">
-              <strong>{job?.note ?? 'Working on the edit'}</strong>
+              <strong>{cancelling ? 'Stopping…' : (job?.note ?? 'Working on the edit')}</strong>
               <div className="job-bar">
                 <div className="job-bar-fill" style={{ width: `${job?.pct ?? 5}%` }} />
               </div>
             </div>
+            {job && ['trim', 'stitch'].includes(job.kind) && (
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={cancelRunningJob}
+                disabled={cancelling}
+                title="Stop this edit. Your video stays exactly as it was."
+              >
+                Cancel
+              </button>
+            )}
           </div>
         </div>
+      )}
+
+      {confirmLeave && (
+        <Modal title="You have cuts you have not saved" onClose={() => {
+          if (confirmLeave === 'nav') onLeaveResolved?.(false);
+          setConfirmLeave(null);
+        }}>
+          <div className="modal-form">
+            <p className="modal-text">
+              The cuts you marked on the timeline are not saved yet. Leave now and they are gone.
+            </p>
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  if (confirmLeave === 'nav') onLeaveResolved?.(false);
+                  setConfirmLeave(null);
+                }}
+              >
+                Keep editing
+              </button>
+              <button
+                type="button"
+                className="btn-danger-quiet"
+                onClick={() => {
+                  const kind = confirmLeave;
+                  setConfirmLeave(null);
+                  leaveTo(kind);
+                }}
+              >
+                Leave without saving
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => {
+                  const kind = confirmLeave;
+                  setConfirmLeave(null);
+                  void save().then((ok) => {
+                    if (ok) leaveTo(kind);
+                  });
+                }}
+              >
+                Save, then leave
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {confirmAction === 'keep' && (
+        <Modal title="Keep these changes" onClose={() => setConfirmAction(null)}>
+          <div className="modal-form">
+            <p className="modal-text">
+              Your edited video stays exactly as it is. The original recording
+              {origLabel ? ` (${origLabel})` : ''} moves to the Trash, so you can still get it back
+              from there if you ever need it.
+            </p>
+            <div className="modal-actions">
+              <button type="button" className="btn-secondary" onClick={() => setConfirmAction(null)}>
+                Not yet
+              </button>
+              <button type="button" className="btn-primary" onClick={() => void keepEdit()}>
+                Keep changes, Trash the original
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {confirmAction === 'revert' && (
+        <Modal title="Go back to the original" onClose={() => setConfirmAction(null)}>
+          <div className="modal-form">
+            <p className="modal-text">
+              This undoes {editCount > 0 ? `all your changes (${editSummary})` : 'your changes'} and
+              brings back the original recording{origDur ? ` (${formatDuration(origDur)})` : ''}. The
+              edited version will be gone.
+            </p>
+            <div className="modal-actions">
+              <button type="button" className="btn-secondary" onClick={() => setConfirmAction(null)}>
+                Keep my changes
+              </button>
+              <button type="button" className="btn-danger" onClick={() => void revert()}>
+                Bring back the original
+              </button>
+            </div>
+          </div>
+        </Modal>
       )}
 
       {addOpen && (
@@ -966,6 +1480,12 @@ export function EditorView({
                     <strong>{v.title}</strong>
                     <span>
                       {formatDuration(v.durationSec)} · {v.width}×{v.height}
+                      {Date.now() - new Date(v.createdAt).getTime() < 10 * 60_000 && (
+                        <>
+                          {' '}
+                          <span className="badge badge-shared">Just recorded</span>
+                        </>
+                      )}
                     </span>
                   </span>
                   <Icon.Plus width={16} height={16} />
