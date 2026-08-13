@@ -220,18 +220,22 @@ body {
 
 /* ------------------------------------------------------------- mic meter */
 
-/* Thin perceptual level bar under the mic toggle: proof the voice is being
-   captured. scaleX, not width, so the 2Hz updates never trigger layout. */
+/* Perceptual level bar under the mic toggle: proof the voice is being
+   captured. scaleX, not width, so the 2Hz updates never trigger layout.
+   Tall + green-tinted track so it can never be mistaken for a .hud-sep
+   divider (a first-time tester read the old 3px hairline as one). */
 .hud-mic-meter {
   width: 40px;
-  height: 3px;
-  border-radius: 2px;
+  height: 6px;
+  border-radius: 3px;
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.14);
+  background: rgba(48, 209, 88, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
 }
 
 .hud-mic-meter-fill {
   height: 100%;
+  border-radius: 3px;
   background: var(--ol-success);
   transform-origin: left;
   transition: transform 320ms ease-out;

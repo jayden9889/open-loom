@@ -280,3 +280,42 @@ body.launcher-body {
   font-variant-numeric: tabular-nums;
   color: rgba(255, 255, 255, 0.45);
 }
+
+/* Mic check: meter + one line of reassurance. The old bare 3px hairline read
+   as a divider and nobody knew it was their voice. */
+.launcher-mic-check {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.launcher-mic-check .mic-meter {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(48, 209, 88, 0.16);
+}
+
+.mic-meter-caption {
+  font-size: 10.5px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.mic-meter-caption.heard {
+  color: var(--ol-success);
+}
+
+/* Mode toggle block above the source picker. */
+.launcher-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 14px 8px;
+  flex-shrink: 0;
+}
+
+/* Scroll affordance: the source list scrolls under the pinned lower panel,
+   and without a fade the clipped row reads as "loading never finished". */
+.launcher-sources-scroll {
+  -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 22px), transparent);
+  mask-image: linear-gradient(to bottom, black calc(100% - 22px), transparent);
+}

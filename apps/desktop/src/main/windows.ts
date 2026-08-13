@@ -547,7 +547,28 @@ export function getSwitcherWindow(): BrowserWindow | null {
 
 let notesWindow: BrowserWindow | null = null;
 
-export const NOTES_SIZE = { width: 460, height: 208 };
+/* Tall enough to show a full 500-character note without hiding lines behind
+   an invisible scroll. */
+export const NOTES_SIZE = { width: 460, height: 292 };
+
+/**
+ * Where the user last dragged the notes card, kept for the session so the
+ * next take does not put it back over the content they moved it off (same
+ * contract as the camera bubble's position memory).
+ */
+let notesBounds: Rectangle | null = null;
+
+/** The dragged position when it still fits this display; null = default. */
+function storedNotesBounds(display: Display): Rectangle | null {
+  if (!notesBounds) return null;
+  const { workArea } = display;
+  const fits =
+    notesBounds.x >= workArea.x &&
+    notesBounds.y >= workArea.y &&
+    notesBounds.x + notesBounds.width <= workArea.x + workArea.width &&
+    notesBounds.y + notesBounds.height <= workArea.y + workArea.height;
+  return fits ? { ...notesBounds, width: NOTES_SIZE.width, height: NOTES_SIZE.height } : null;
+}
 
 /**
  * Glass card pinned top-centre of the recorded display - right under the
@@ -559,7 +580,7 @@ export function showNotesOverlay(display: Display, text: string): BrowserWindow 
   destroyNotesOverlay();
   const { workArea } = display;
   notesWindow = overlayBase(
-    {
+    storedNotesBounds(display) ?? {
       x: workArea.x + Math.round((workArea.width - NOTES_SIZE.width) / 2),
       y: workArea.y + 12,
       width: NOTES_SIZE.width,
@@ -568,6 +589,9 @@ export function showNotesOverlay(display: Display, text: string): BrowserWindow 
     true
   );
   notesWindow.setMovable(true);
+  notesWindow.on('moved', () => {
+    if (notesWindow && !notesWindow.isDestroyed()) notesBounds = notesWindow.getBounds();
+  });
   notesWindow.setAlwaysOnTop(true, 'screen-saver', 1);
   excludeFromCapture(notesWindow);
   notesWindow.once('ready-to-show', () => notesWindow?.showInactive());

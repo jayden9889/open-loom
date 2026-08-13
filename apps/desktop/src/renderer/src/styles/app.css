@@ -2777,3 +2777,20 @@ textarea {
     animation: none;
   }
 }
+
+/* Flash when the More menu reveals the publish card in the side rail - the
+   click otherwise looks like it did nothing. */
+@keyframes yt-flash {
+  0%, 60% {
+    outline: 2px solid var(--ol-accent);
+    outline-offset: 2px;
+  }
+  100% {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+  }
+}
+
+.youtube-block.flash {
+  animation: yt-flash 1.3s ease-out both;
+}

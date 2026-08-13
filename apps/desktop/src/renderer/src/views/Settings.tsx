@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AppInfo, CameraEffectsStatus, PermissionsSnapshot, Settings, ShortcutSettings } from '@shared/types';
 import { Icon } from '../components/icons';
+import { prettyAccel } from '../components/accel';
 import { attachHealthyCameraStream, type HealthyCameraSession } from '../media';
 import { Modal, Segmented, Toggle, cleanIpcError, useToasts } from '../components/ui';
 
@@ -90,6 +91,9 @@ function ShortcutField({
   const onKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
     if (!capturing) return;
     e.preventDefault();
+    // Keys held a beat repeat before React re-renders with capturing=false,
+    // firing onSave twice and stacking two identical conflict toasts.
+    if (e.repeat) return;
     if (e.key === 'Escape') {
       setCapturing(false);
       return;
@@ -114,7 +118,9 @@ function ShortcutField({
       onKeyDown={onKeyDown}
       onBlur={() => setCapturing(false)}
     >
-      {capturing ? 'Press keys' : value}
+      {/* Display the OS's spelling of the combo; the raw Electron string
+          ("CommandOrControl+Shift+L") is not a key on anyone's keyboard. */}
+      {capturing ? 'Press keys' : prettyAccel(value)}
     </button>
   );
 }
@@ -883,10 +889,15 @@ export function SettingsView({
 
           {pane === 'sharing' && (
             <section aria-label="Sharing">
+              {/* Copy leads with what you must already HAVE, not what you get -
+                  a non-technical reader cannot choose between features when the
+                  real question is which prerequisite they own. */}
               <p className="settings-intro">
-                Share through your own OpenLoom Server (comments, reactions, analytics) or any S3-compatible bucket
-                with a static watch page. Off keeps every recording local. Use Test to confirm the app can reach the
-                provider before you rely on it.
+                Both options need something you run or rent: the OpenLoom Server is software you install on your own
+                machine or host (it adds comments, reactions and analytics), and a storage bucket is a cloud storage
+                account you already have (Cloudflare R2, Backblaze B2, AWS S3 or similar). Off keeps every recording
+                local. No server and no bucket? You can always send the video file itself, or publish to YouTube from
+                the video&apos;s page. Use Test below to confirm the app can reach your provider before you rely on it.
               </p>
               <Row label="Provider">
                 <Segmented

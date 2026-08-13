@@ -75,14 +75,30 @@ const ACTIONS: Record<keyof ShortcutSettings, () => void> = {
   notes: () => toggleNotes(),
 };
 
+/** Row labels for validation errors - internal keys like "startStop" must never reach a toast. */
+const SHORTCUT_LABELS: Record<keyof ShortcutSettings, string> = {
+  startStop: 'Start / stop recording',
+  pauseResume: 'Pause / resume',
+  cancel: 'Cancel recording',
+  restart: 'Restart recording',
+  draw: 'Toggle drawing',
+  notes: 'Show / hide talking notes',
+};
+
+function shortcutLabel(name: string): string {
+  return SHORTCUT_LABELS[name as keyof ShortcutSettings] ?? name;
+}
+
 /** Validate a shortcut map: no empties, no duplicates. Returns error text or null. */
 export function validateShortcuts(shortcuts: ShortcutSettings): string | null {
   const seen = new Map<string, string>();
   for (const [name, accel] of Object.entries(shortcuts)) {
-    if (!accel.trim()) return `The ${name} shortcut is empty.`;
+    if (!accel.trim()) return `The ${shortcutLabel(name)} shortcut is empty.`;
     const key = accel.toLowerCase().replace(/\s+/g, '');
     const clash = seen.get(key);
-    if (clash) return `${name} uses the same keys as ${clash}.`;
+    if (clash) {
+      return `${shortcutLabel(name)} uses the same keys as ${shortcutLabel(clash)}. Try another combination.`;
+    }
     seen.set(key, name);
   }
   return null;

@@ -610,7 +610,7 @@ export function WatchView({
                 onClick: () => setShareOpen(true),
               },
               {
-                label: 'Change the thumbnail…',
+                label: 'Change thumbnail…',
                 icon: <Icon.Camera width={15} height={15} />,
                 onClick: () => setThumbPickerOpen(true),
               },
@@ -625,6 +625,14 @@ export function WatchView({
                 onClick: () => {
                   setTab('details');
                   setYoutubeOpen(true);
+                  // The card lives in the side rail; without a scroll + flash
+                  // the menu click can look like it did nothing.
+                  requestAnimationFrame(() => {
+                    const el = document.querySelector('.youtube-block');
+                    el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    el?.classList.add('flash');
+                    setTimeout(() => el?.classList.remove('flash'), 1300);
+                  });
                 },
               },
               {
@@ -1489,6 +1497,16 @@ export function WatchView({
           onOpenSharingSettings={() => {
             setShareOpen(false);
             onOpenSharingSettings();
+          }}
+          onPublishYouTube={() => {
+            setTab('details');
+            setYoutubeOpen(true);
+            requestAnimationFrame(() => {
+              const el = document.querySelector('.youtube-block');
+              el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              el?.classList.add('flash');
+              setTimeout(() => el?.classList.remove('flash'), 1300);
+            });
           }}
         />
       )}

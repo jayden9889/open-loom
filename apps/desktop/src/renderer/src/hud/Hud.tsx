@@ -1,14 +1,19 @@
 /**
  * Recording HUD (SPEC R7): frameless vertical control bar. Elapsed timer with
- * red dot, pause/resume, stop, restart, cancel, mic
- * toggle, draw toggle. The camera itself is never off - the layout only moves
- * the face between the corner bubble and full frame. A hint strip at the
- * bottom names the hovered control and its configured shortcut (the window is
- * too narrow for side tooltips).
+ * red dot, pause/resume, re-say-last-10, stop, restart, cancel, mic
+ * toggle + level meter, notes toggle, draw toggle. The camera itself is never
+ * off - the layout only moves the face between the corner bubble and full
+ * frame. A hint strip at the bottom names the hovered control and its
+ * configured shortcut (the window is too narrow for side tooltips).
+ *
+ * Hints are DERIVED at render from the hovered control's key, never cached as
+ * text at hover time - a cached hint kept reading "Hide notes" after the
+ * notes were already hidden.
  */
 import { useEffect, useState } from 'react';
 import type { RecordingState, ShortcutSettings } from '@shared/types';
 import { DEFAULT_SHORTCUTS } from '@shared/types';
+import { prettyAccel } from '../components/accel';
 
 function formatElapsed(sec: number): string {
   const m = Math.floor(sec / 60);
@@ -16,22 +21,11 @@ function formatElapsed(sec: number): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-function prettyAccel(accel: string): string {
-  const isMac = navigator.platform.toLowerCase().includes('mac');
-  return accel
-    .replace('CommandOrControl', isMac ? '⌘' : 'Ctrl')
-    .replace('Command', '⌘')
-    .replace('Control', 'Ctrl')
-    .replace('Shift', isMac ? '⇧' : 'Shift')
-    .replace('Alt', isMac ? '⌥' : 'Alt')
-    .replaceAll('+', isMac ? '' : '+');
-}
-
 interface HudButtonProps {
   label: string;
-  hint: string;
+  hintKey: string;
+  onHint: (key: string | null) => void;
   onClick: () => void;
-  onHint: (hint: string | null) => void;
   active?: boolean;
   danger?: boolean;
   disabled?: boolean;
@@ -46,9 +40,9 @@ function HudButton(props: HudButtonProps) {
       onClick={props.onClick}
       disabled={props.disabled}
       aria-label={props.label}
-      onMouseEnter={() => props.onHint(props.hint)}
+      onMouseEnter={() => props.onHint(props.hintKey)}
       onMouseLeave={() => props.onHint(null)}
-      onFocus={() => props.onHint(props.hint)}
+      onFocus={() => props.onHint(props.hintKey)}
       onBlur={() => props.onHint(null)}
     >
       {props.children}
@@ -80,7 +74,7 @@ function micLevelToFill(level: number): number {
 export function Hud() {
   const [state, setState] = useState<RecordingState>({ status: 'recording', elapsedSec: 0 });
   const [shortcuts, setShortcuts] = useState<ShortcutSettings>(DEFAULT_SHORTCUTS);
-  const [hint, setHint] = useState<string | null>(null);
+  const [hintKey, setHintKey] = useState<string | null>(null);
   const [penColor, setPenColor] = useState<PenColor>('red');
   const [micLevel, setMicLevel] = useState(0);
 
@@ -152,6 +146,33 @@ export function Hud() {
     );
   }
 
+  // Hint text for whatever is hovered, computed fresh every render so it can
+  // never contradict the state it describes.
+  const hints: Record<string, string> = {
+    pause: `${paused ? 'Resume' : 'Pause'} ${prettyAccel(shortcuts.pauseResume)}`,
+    redo: 'Re-say the last 10s',
+    stop: `Stop ${prettyAccel(shortcuts.startStop)}`,
+    restart: `Restart ${prettyAccel(shortcuts.restart)}`,
+    cancel: `Discard ${prettyAccel(shortcuts.cancel)}`,
+    mic: state.micOn ? 'Mute mic' : 'Unmute mic',
+    notes: `${state.notesOn ? 'Hide notes' : 'Show notes'} ${prettyAccel(shortcuts.notes)}`,
+    draw: state.drawAvailable
+      ? `Draw ${prettyAccel(shortcuts.draw)}`
+      : 'Draw is off in full-face view',
+    penRed: 'Red pen',
+    penViolet: 'Violet pen',
+    penYellow: 'Yellow pen',
+    penClear: 'Clear ink now',
+    drawExit: 'Done - ink fades away',
+  };
+
+  // Full-face is a TEMPORARY reason draw is off (flip the layout back and it
+  // returns), so the button stays visible but disabled with its hint. A
+  // window or camera-only capture can never draw - hide it entirely there,
+  // because a permanently dead control reads as "something is broken".
+  const drawTemporarilyOff = !state.drawAvailable && state.cameraLayout === 'full';
+  const showDraw = state.drawAvailable || drawTemporarilyOff;
+
   return (
     <div className="hud">
       <div className="hud-grip" aria-hidden="true">
@@ -167,8 +188,8 @@ export function Hud() {
 
       <HudButton
         label={paused ? 'Resume' : 'Pause'}
-        hint={`${paused ? 'Resume' : 'Pause'} ${prettyAccel(shortcuts.pauseResume)}`}
-        onHint={setHint}
+        hintKey="pause"
+        onHint={setHintKey}
         onClick={() => void (paused ? window.openloom.resumeRecording() : window.openloom.pauseRecording())}
       >
         {paused ? (
@@ -185,8 +206,8 @@ export function Hud() {
 
       <HudButton
         label="Re-say the last 10 seconds"
-        hint="Re-say the last 10s"
-        onHint={setHint}
+        hintKey="redo"
+        onHint={setHintKey}
         onClick={() => window.openloom.redoLastTen()}
         disabled={paused}
       >
@@ -209,8 +230,8 @@ export function Hud() {
 
       <HudButton
         label="Stop and save"
-        hint={`Stop ${prettyAccel(shortcuts.startStop)}`}
-        onHint={setHint}
+        hintKey="stop"
+        onHint={setHintKey}
         onClick={() => void window.openloom.stopRecording().catch(() => undefined)}
         danger
       >
@@ -219,10 +240,14 @@ export function Hud() {
         </svg>
       </HudButton>
 
+      {/* Stop saves; the two below destroy footage. The separator keeps them
+          from reading as one evenly-spaced strip of same-weight choices. */}
+      <div className="hud-sep" aria-hidden="true" />
+
       <HudButton
         label="Restart recording"
-        hint={`Restart ${prettyAccel(shortcuts.restart)}`}
-        onHint={setHint}
+        hintKey="restart"
+        onHint={setHintKey}
         onClick={() => void window.openloom.restartRecording().catch(() => undefined)}
       >
         <svg width="18" height="18" viewBox="0 0 24 24" {...stroke} aria-hidden="true">
@@ -233,8 +258,8 @@ export function Hud() {
 
       <HudButton
         label="Cancel recording"
-        hint={`Discard ${prettyAccel(shortcuts.cancel)}`}
-        onHint={setHint}
+        hintKey="cancel"
+        onHint={setHintKey}
         onClick={() => void window.openloom.cancelRecording()}
       >
         <svg width="18" height="18" viewBox="0 0 24 24" {...stroke} aria-hidden="true">
@@ -248,8 +273,8 @@ export function Hud() {
 
       <HudButton
         label={state.micOn ? 'Mute microphone' : 'Unmute microphone'}
-        hint={state.micOn ? 'Mute mic' : 'Unmute mic'}
-        onHint={setHint}
+        hintKey="mic"
+        onHint={setHintKey}
         onClick={() => window.openloom.toggleMic(!state.micOn)}
         active={!!state.micOn}
       >
@@ -270,30 +295,11 @@ export function Hud() {
         </div>
       )}
 
-      <HudButton
-        label={state.drawOn ? 'Stop drawing' : 'Draw on screen'}
-        hint={
-          state.drawAvailable
-            ? `Draw ${prettyAccel(shortcuts.draw)}`
-            : state.cameraLayout === 'full'
-              ? 'Draw is off in full-face view'
-              : 'Draw needs full-screen capture'
-        }
-        onHint={setHint}
-        onClick={() => window.openloom.toggleDraw(!state.drawOn)}
-        active={!!state.drawOn}
-        disabled={!state.drawAvailable}
-      >
-        <svg width="18" height="18" viewBox="0 0 24 24" {...stroke} aria-hidden="true">
-          <path d="M4 20c.6-2.7 1.4-4 3-5.7L16.6 4.7a2.1 2.1 0 0 1 3 3L10 17.3c-1.7 1.6-3 2.3-6 2.7Z" />
-        </svg>
-      </HudButton>
-
       {state.notesAvailable && (
         <HudButton
           label={state.notesOn ? 'Hide talking notes' : 'Show talking notes'}
-          hint={`${state.notesOn ? 'Hide notes' : 'Show notes'} ${prettyAccel(shortcuts.notes)}`}
-          onHint={setHint}
+          hintKey="notes"
+          onHint={setHintKey}
           onClick={() => window.openloom.toggleNotes()}
           active={!!state.notesOn}
         >
@@ -306,6 +312,21 @@ export function Hud() {
         </HudButton>
       )}
 
+      {showDraw && (
+        <HudButton
+          label={state.drawOn ? 'Stop drawing' : 'Draw on screen'}
+          hintKey="draw"
+          onHint={setHintKey}
+          onClick={() => window.openloom.toggleDraw(!state.drawOn)}
+          active={!!state.drawOn}
+          disabled={!state.drawAvailable}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" {...stroke} aria-hidden="true">
+            <path d="M4 20c.6-2.7 1.4-4 3-5.7L16.6 4.7a2.1 2.1 0 0 1 3 3L10 17.3c-1.7 1.6-3 2.3-6 2.7Z" />
+          </svg>
+        </HudButton>
+      )}
+
       {state.drawOn && (
         <div className="hud-draw-tools">
           {PEN_COLORS.map((c) => (
@@ -314,8 +335,8 @@ export function Hud() {
               type="button"
               className={`hud-pen hud-pen-${c}${penColor === c ? ' selected' : ''}`}
               aria-label={`${c} pen`}
-              onMouseEnter={() => setHint(`${c.charAt(0).toUpperCase()}${c.slice(1)} pen`)}
-              onMouseLeave={() => setHint(null)}
+              onMouseEnter={() => setHintKey(`pen${c.charAt(0).toUpperCase()}${c.slice(1)}`)}
+              onMouseLeave={() => setHintKey(null)}
               onClick={() => setPenColor(c)}
             />
           ))}
@@ -323,8 +344,8 @@ export function Hud() {
             type="button"
             className="hud-btn hud-pen-clear"
             aria-label="Clear all ink"
-            onMouseEnter={() => setHint('Clear ink now')}
-            onMouseLeave={() => setHint(null)}
+            onMouseEnter={() => setHintKey('penClear')}
+            onMouseLeave={() => setHintKey(null)}
             onClick={() => window.openloom.clearDraw()}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" {...stroke} aria-hidden="true">
@@ -337,8 +358,8 @@ export function Hud() {
             type="button"
             className="hud-btn hud-draw-exit"
             aria-label="Done drawing"
-            onMouseEnter={() => setHint('Done - ink fades away')}
-            onMouseLeave={() => setHint(null)}
+            onMouseEnter={() => setHintKey('drawExit')}
+            onMouseLeave={() => setHintKey(null)}
             onClick={() => window.openloom.toggleDraw(false)}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" {...stroke} aria-hidden="true">
@@ -349,7 +370,7 @@ export function Hud() {
       )}
 
       <div className="hud-hint" aria-live="polite">
-        {hint ?? ''}
+        {(hintKey && hints[hintKey]) ?? ''}
       </div>
     </div>
   );

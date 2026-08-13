@@ -129,8 +129,14 @@ function MicMeter({ deviceId, enabled }: { deviceId: string; enabled: boolean })
   // width transition, which made the meter lag the voice.
   const fillRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
+  // One state flip when a real level is first heard - the loudest first-take
+  // fear is "did it record silence", so the meter carries an explicit check.
+  const [heard, setHeard] = useState(false);
+  const heardRef = useRef(false);
 
   useEffect(() => {
+    heardRef.current = false;
+    setHeard(false);
     if (!enabled) {
       if (fillRef.current) fillRef.current.style.transform = 'scaleX(0)';
       return;
@@ -163,6 +169,10 @@ function MicMeter({ deviceId, enabled }: { deviceId: string; enabled: boolean })
             sum += c * c;
           }
           const level = Math.min(1, Math.sqrt(sum / data.length) * 3);
+          if (level > 0.12 && !heardRef.current) {
+            heardRef.current = true;
+            setHeard(true);
+          }
           if (fillRef.current) fillRef.current.style.transform = `scaleX(${level})`;
           raf = requestAnimationFrame(tick);
         };
@@ -182,8 +192,13 @@ function MicMeter({ deviceId, enabled }: { deviceId: string; enabled: boolean })
   if (!enabled) return null;
   if (error) return <span className="mic-meter-error">{error}</span>;
   return (
-    <div className="mic-meter" aria-label="Microphone level">
-      <div ref={fillRef} className="mic-meter-fill" style={{ transform: 'scaleX(0)' }} />
+    <div className="launcher-mic-check">
+      <div className="mic-meter" aria-label="Microphone level">
+        <div ref={fillRef} className="mic-meter-fill" style={{ transform: 'scaleX(0)' }} />
+      </div>
+      <span className={`mic-meter-caption${heard ? ' heard' : ''}`} aria-live="polite">
+        {heard ? 'Mic sounds good' : 'Say something to test your mic'}
+      </span>
     </div>
   );
 }
@@ -303,6 +318,43 @@ export function Launcher() {
       offSettings();
     };
   }, [refreshSources, push]);
+
+  // A mic or camera plugged in (or yanked) while the panel sits open appears
+  // in the dropdowns immediately - no reopen. The current pick survives when
+  // its device still exists; a vanished device falls back to the first one
+  // WITH a toast - a silent swap to the built-in mic is only discovered in
+  // playback, after the take is wasted.
+  const micIdRef = useRef(micId);
+  micIdRef.current = micId;
+  const cameraIdRef = useRef(cameraId);
+  cameraIdRef.current = cameraId;
+  useEffect(() => {
+    const onDeviceChange = () => {
+      void (async () => {
+        try {
+          const devices = await window.openloom.listMediaDevices();
+          const cams = dedupeDevices(devices.cameras);
+          const micList = dedupeDevices(devices.mics);
+          setCameras(cams);
+          setMics(micList);
+          const micGone = micIdRef.current && !micList.some((m) => m.deviceId === micIdRef.current);
+          const camGone = cameraIdRef.current && !cams.some((c) => c.deviceId === cameraIdRef.current);
+          if (micGone) {
+            push('error', `Your microphone disconnected - now using ${micList[0]?.label || 'the default mic'}.`);
+          }
+          if (camGone) {
+            push('error', `Your camera disconnected - now using ${cams[0]?.label || 'the default camera'}.`);
+          }
+          setCameraId((cur) => (cams.some((c) => c.deviceId === cur) ? cur : cams[0]?.deviceId ?? ''));
+          setMicId((cur) => (micList.some((m) => m.deviceId === cur) ? cur : micList[0]?.deviceId ?? ''));
+        } catch {
+          /* keep the current lists; the next change event retries */
+        }
+      })();
+    };
+    navigator.mediaDevices.addEventListener('devicechange', onDeviceChange);
+    return () => navigator.mediaDevices.removeEventListener('devicechange', onDeviceChange);
+  }, [push]);
 
   // Offer the source recorded last time first, when it still exists. Runs once
   // both the settings and a source list are in; a vanished source falls back
@@ -427,6 +479,35 @@ export function Launcher() {
         <MicMeter deviceId={micId} enabled={micOn} />
       </div>
 
+      {/* The most consequential choice on the panel - it decides what gets
+          recorded - so it sits ABOVE the picker it controls, never below the
+          Start button where a first-timer only finds it after recording. */}
+      <div className="launcher-mode">
+        <Segmented
+          value={mode}
+          onChange={setMode}
+          options={[
+            {
+              value: 'cam',
+              label: (
+                <>
+                  <Icon.Camera width={15} height={15} /> Full face
+                </>
+              ),
+            },
+            {
+              value: 'screen-cam',
+              label: (
+                <>
+                  <Icon.ScreenCam width={15} height={15} /> Screen
+                </>
+              ),
+            },
+          ]}
+        />
+        <p className="launcher-hint">Your face stays in the recording in both modes.</p>
+      </div>
+
       {isScreen && (
         <div className="launcher-sources">
           <div className="source-picker-head">
@@ -537,21 +618,28 @@ export function Launcher() {
           <label className="field-label" htmlFor="nr-notes">
             Talking notes
           </label>
-          {/* The counter only appears once it matters; the cap keeps notes at
-              glanceable prompt bullets, not a script. */}
-          {notes.length >= NOTES_MAX_CHARS * 0.8 && (
-            <span className="launcher-notes-count">
-              {notes.length}/{NOTES_MAX_CHARS}
-            </span>
-          )}
+          {/* Always visible: a cap you only discover by losing text is a trap. */}
+          <span className="launcher-notes-count">
+            {notes.length}/{NOTES_MAX_CHARS}
+          </span>
         </div>
         <textarea
           id="nr-notes"
-          rows={2}
+          /* Grows with the note (to six lines) so you can read back what you
+             will read on screen, instead of writing into a two-line letterbox. */
+          rows={Math.min(6, Math.max(2, notes.split('\n').length))}
           maxLength={NOTES_MAX_CHARS}
           placeholder="Jot what to say - it floats on screen while you record. Only you see it."
           value={notes}
           onChange={(e) => saveNotes(e.target.value.slice(0, NOTES_MAX_CHARS))}
+          onPaste={(e) => {
+            // maxLength clips a long paste before onChange can see it - say so,
+            // or the user walks into the call believing the lost lines exist.
+            const incoming = e.clipboardData.getData('text');
+            if (notes.length + incoming.length > NOTES_MAX_CHARS) {
+              push('info', `Trimmed to ${NOTES_MAX_CHARS} characters - notes work best as prompts, not a script.`);
+            }
+          }}
         />
       </div>
 
@@ -560,29 +648,9 @@ export function Launcher() {
           <Icon.Record width={15} height={15} />
           {starting ? 'Starting' : 'Start recording'}
         </button>
-        <Segmented
-          value={mode}
-          onChange={setMode}
-          options={[
-            {
-              value: 'cam',
-              label: (
-                <>
-                  <Icon.Camera width={15} height={15} /> Full face
-                </>
-              ),
-            },
-            {
-              value: 'screen-cam',
-              label: (
-                <>
-                  <Icon.ScreenCam width={15} height={15} /> Screen
-                </>
-              ),
-            },
-          ]}
-        />
-        <p className="launcher-hint">Your face stays in the recording in both modes.</p>
+        <p className="launcher-hint">
+          Fluff a line while recording? The ↺10 button re-says the last ten seconds.
+        </p>
       </div>
     </div>
   );

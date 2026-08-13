@@ -18,6 +18,8 @@ export interface ShareDialogProps {
   onChange?: (meta: VideoMeta) => void;
   /** When provided, the unconfigured state offers a jump to Settings. */
   onOpenSharingSettings?: () => void;
+  /** When provided, the unconfigured state offers YouTube as a peer route. */
+  onPublishYouTube?: () => void;
 }
 
 function providerName(kind: string): string {
@@ -31,7 +33,7 @@ function embedSnippetFor(url: string): string {
   return `<iframe src="${url}${sep}embed=1" width="640" height="400" frameborder="0" allow="fullscreen" allowfullscreen title="Open Loom video"></iframe>`;
 }
 
-export function ShareDialog({ video, onClose, onChange, onOpenSharingSettings }: ShareDialogProps) {
+export function ShareDialog({ video, onClose, onChange, onOpenSharingSettings, onPublishYouTube }: ShareDialogProps) {
   const toasts = useToasts();
   const [meta, setMeta] = useState<VideoMeta>(video);
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -149,6 +151,33 @@ export function ShareDialog({ video, onClose, onChange, onOpenSharingSettings }:
                     </button>
                   </div>
                 )}
+                {/* The primary delivery button must NEVER end at a wall: both
+                    routes below work with zero setup, today. */}
+                <div className="shr-alt">
+                  <p className="shr-hint">No server or bucket? You can still deliver right now:</p>
+                  <div className="shr-alt-actions">
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => window.openloom.revealVideo(video.id)}
+                      title="Opens the MP4 in your file manager - send it by email or WhatsApp"
+                    >
+                      Show the video file
+                    </button>
+                    {onPublishYouTube && (
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => {
+                          onClose();
+                          onPublishYouTube();
+                        }}
+                      >
+                        Publish to YouTube instead
+                      </button>
+                    )}
+                  </div>
+                </div>
               </div>
             ) : (
               <div className="shr-section">
