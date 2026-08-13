@@ -154,7 +154,9 @@ export function getMainWindow(): BrowserWindow | null {
 
 let launcherWindow: BrowserWindow | null = null;
 
-export const LAUNCHER_SIZE = { width: 316, height: 640 };
+/* Height covers the talking-notes field without squeezing the source picker
+   into a two-row sliver; small work areas still clamp in showLauncher. */
+export const LAUNCHER_SIZE = { width: 316, height: 724 };
 
 /**
  * Slim always-on-top panel pinned to the left edge of the primary display:
@@ -272,7 +274,7 @@ function excludeFromCapture(win: BrowserWindow): void {
   }
 }
 
-export const HUD_SIZE = { width: 68, height: 508 };
+export const HUD_SIZE = { width: 68, height: 552 };
 /** Extra height for the draw toolbar (pen colours + clear + done) while ink is on. */
 export const HUD_DRAW_EXTRA = 155;
 /** Wider footprint while the HUD shows the confirm or redo panel (readable copy). */
@@ -582,6 +584,16 @@ export function showNotesOverlay(display: Display, text: string): BrowserWindow 
 export function destroyNotesOverlay(): void {
   if (notesWindow && !notesWindow.isDestroyed()) notesWindow.destroy();
   notesWindow = null;
+}
+
+/**
+ * Hide/show rather than destroy/recreate, so a toggle keeps the position the
+ * user dragged the card to and costs no renderer restart.
+ */
+export function setNotesOverlayVisible(visible: boolean): void {
+  if (!notesWindow || notesWindow.isDestroyed()) return;
+  if (visible) notesWindow.showInactive();
+  else notesWindow.hide();
 }
 
 /** 3-2-1 countdown overlay covering the recorded display (SPEC R5). */

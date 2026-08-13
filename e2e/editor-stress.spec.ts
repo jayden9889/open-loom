@@ -187,7 +187,10 @@ test('editor survives a hostile user session', async () => {
     expect(durAfter).toBeLessThan(durBefore - 2); // two ~2s silences, padded
     expect(durAfter).toBeGreaterThan(4);
 
-    await page.locator('.edit-banner button', { hasText: 'Revert' }).click();
+    // Revert now names what it does and sits behind a confirm that names the
+    // cost (Pass 3): banner button, then the modal's danger action.
+    await page.locator('.edit-banner button', { hasText: 'Go back to the original' }).click();
+    await page.locator('.modal button', { hasText: 'Bring back the original' }).click();
     await expect(page.locator('.edit-banner')).toBeHidden({ timeout: 60_000 });
     const durRestored = ffprobeDuration(videoFile);
     expect(Math.abs(durRestored - durBefore)).toBeLessThan(0.2);

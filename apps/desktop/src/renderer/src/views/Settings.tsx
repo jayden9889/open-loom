@@ -645,6 +645,9 @@ export function SettingsView({
               <Row label="Toggle drawing">
                 <ShortcutField value={s.shortcuts.draw} onSave={(a) => saveShortcut('draw', a)} ariaLabel="Draw shortcut" />
               </Row>
+              <Row label="Show / hide talking notes">
+                <ShortcutField value={s.shortcuts.notes} onSave={(a) => saveShortcut('notes', a)} ariaLabel="Talking notes shortcut" />
+              </Row>
             </section>
           )}
 

@@ -47,6 +47,7 @@ import {
   setBubbleVisible,
   setHudExpanded,
   setHudPanel,
+  setNotesOverlayVisible,
   setDrawInteractive,
   showBubble,
   showCountdown,
@@ -117,6 +118,10 @@ interface ActiveRecording {
   lastAudibleAt: number;
   /** One dead-mic warning per silent stretch, not one per tick. */
   micSilenceNotified: boolean;
+  /** Talking notes exist for this take (the HUD shows the toggle only then). */
+  notesAvailable: boolean;
+  /** The notes overlay is currently shown. */
+  notesOn: boolean;
   stoppedResolvers: { resolve: (r: { videoId: string }) => void; reject: (e: Error) => void }[];
 }
 
@@ -244,6 +249,8 @@ function emitState(partial?: Partial<RecordingState>): void {
         active.opts.mode !== 'cam' && !!active.opts.sourceIsDisplay && active.cameraLayout !== 'full',
       ...(active.confirmKind ? { confirm: active.confirmKind } : {}),
       ...(active.pendingRedo ? { redoCountdown: active.pendingRedo.secondsLeft } : {}),
+      notesAvailable: active.notesAvailable,
+      notesOn: active.notesOn,
       ...partial,
     };
   } else {
@@ -447,6 +454,8 @@ export async function startRecording(opts: RecordingOptions): Promise<void> {
     confirmExpiry: null,
     lastAudibleAt: 0,
     micSilenceNotified: false,
+    notesAvailable: false,
+    notesOn: false,
     stoppedResolvers: [],
   };
   const rec = active;
@@ -583,6 +592,8 @@ async function beginEngineCapture(rec: ActiveRecording): Promise<void> {
 
   showHud(rec.display);
   const notes = settings.recording.notes.trim();
+  rec.notesAvailable = notes.length > 0;
+  rec.notesOn = rec.notesAvailable;
   if (notes) showNotesOverlay(rec.display, notes);
   if (rec.opts.mode === 'screen-cam' && rec.cameraOn) {
     showBubble(rec.display, settings.bubble.size);
@@ -912,6 +923,8 @@ async function startRecordingWithoutCountdown(opts: RecordingOptions): Promise<v
     confirmExpiry: null,
     lastAudibleAt: 0,
     micSilenceNotified: false,
+    notesAvailable: false,
+    notesOn: false,
     stoppedResolvers: [],
   };
   const rec = active;
@@ -1169,6 +1182,15 @@ export function toggleDraw(on: boolean): void {
   emitState();
 }
 
+/** Hide/show the talking-notes overlay; it keeps its dragged position. */
+export function toggleNotes(): void {
+  const rec = active;
+  if (!rec || !rec.notesAvailable) return;
+  rec.notesOn = !rec.notesOn;
+  setNotesOverlayVisible(rec.notesOn);
+  emitState();
+}
+
 export function setDrawColor(color: string): void {
   const rec = active;
   if (!rec || !rec.drawOn) return;
@@ -1271,6 +1293,7 @@ export function registerEngineIpc(): void {
   });
 
   ipcMain.on('ol:redoLastTen', () => redoLastTen());
+  ipcMain.on('ol:toggleNotes', () => toggleNotes());
   ipcMain.on('ol:cancelPendingRedo', () => cancelPendingRedo());
   ipcMain.on('ol:resolveRecordingConfirm', (_event, confirmed: boolean) =>
     resolveRecordingConfirm(confirmed === true)

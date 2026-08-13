@@ -53,6 +53,7 @@ const api: OpenLoomAPI = {
   toggleCamera: (on: boolean) => ipcRenderer.send('ol:toggleCamera', on),
   toggleMic: (on: boolean) => ipcRenderer.send('ol:toggleMic', on),
   toggleDraw: (on: boolean) => ipcRenderer.send('ol:toggleDraw', on),
+  toggleNotes: () => ipcRenderer.send('ol:toggleNotes'),
   setDrawColor: (color: string) => ipcRenderer.send('ol:setDrawColor', color),
   clearDraw: () => ipcRenderer.send('ol:clearDraw'),
   setBubbleSize: (s: BubbleSize) => ipcRenderer.send('ol:setBubbleSize', s),

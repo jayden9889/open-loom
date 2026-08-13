@@ -348,11 +348,18 @@ export function EditorView({
     const load = async (): Promise<void> => {
       const url = `${window.openloom.fileUrl(id, 'waveform.json')}?v=${fileVersion}`;
       const res = await fetch(url);
-      if (!res.ok) throw new Error('no waveform');
-      const data = (await res.json()) as { peaks?: number[]; version?: number };
-      if (cancelled) return;
-      setPeaks(data.peaks ?? []);
-      if ((data.version ?? 1) >= CURRENT_WAVEFORM_VERSION) return;
+      if (res.ok) {
+        const data = (await res.json()) as { peaks?: number[]; version?: number };
+        if (cancelled) return;
+        setPeaks(data.peaks ?? []);
+        if ((data.version ?? 1) >= CURRENT_WAVEFORM_VERSION) return;
+      } else {
+        // A waveform that was never generated (processing hiccup, imported
+        // file) gets the same background self-heal as an outdated one -
+        // otherwise a video WITH sound wears "No audio track" forever.
+        if (cancelled) return;
+        setPeaks([]);
+      }
 
       await window.openloom.regeneratePreviews(id);
       if (cancelled) return;
@@ -522,9 +529,11 @@ export function EditorView({
   useEffect(() => {
     return window.openloom.onJobProgress((j) => {
       if (j.videoId !== id) return;
-      if (['trim', 'stitch', 'revert', 'thumbnail', 'gif', 'waveform'].includes(j.kind)) {
-        setJob(j.pct >= 100 && ['thumbnail', 'gif', 'waveform'].includes(j.kind) ? null : j);
-      }
+      // Only file-mutating jobs raise the blocking overlay. Preview kinds
+      // (thumbnail/gif/waveform) also run as BACKGROUND rebuilds - the
+      // waveform self-heal fires one on open - and surfacing those froze the
+      // whole editor behind the scrim for seconds on old or imported videos.
+      if (['trim', 'stitch', 'revert'].includes(j.kind)) setJob(j);
     });
   }, [id]);
 

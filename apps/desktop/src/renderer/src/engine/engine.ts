@@ -438,24 +438,25 @@ function humanMediaError(err: unknown): string {
 // Mic level meter (feeds the HUD meter + main's silence watchdog)
 // ---------------------------------------------------------------------------
 
-let micMeter: { ownedCtx: AudioContext | null; timer: ReturnType<typeof setInterval> } | null = null;
+let micMeter: { gain: GainNode; analyser: AnalyserNode; timer: ReturnType<typeof setInterval> } | null = null;
 
 /**
- * Sample the mic's RMS at ~2Hz and relay it to main. Taps the raw track ahead
- * of the recorder graph, so a broken meter can never break the take. Pause
+ * Sample the mic's RMS at ~2Hz and relay it to main. Fans the EXISTING
+ * micGain node out into an analyser - never a second MediaStreamSource on the
+ * mic track, which stalls the source and starves MediaRecorder of chunks
+ * (verified: the dead-engine watchdog killed cam takes ~5s in). No graph
+ * means no meter: the raw-track fallback path only exists because
+ * AudioContext creation failed, so a meter context would fail with it. Pause
  * emits nothing on purpose - main's watchdog treats silence-while-paused as
  * expected.
  */
 function startMicMeter(s: EngineSession): void {
   stopMicMeter();
-  if (!s.micTrack) return;
+  if (!s.audioCtx || !s.micGain) return;
   try {
-    const ownedCtx = s.audioCtx ? null : new AudioContext();
-    const ctx = s.audioCtx ?? ownedCtx!;
-    const source = ctx.createMediaStreamSource(new MediaStream([s.micTrack]));
-    const analyser = ctx.createAnalyser();
+    const analyser = s.audioCtx.createAnalyser();
     analyser.fftSize = 1024;
-    source.connect(analyser);
+    s.micGain.connect(analyser);
     const data = new Float32Array(analyser.fftSize);
     const timer = setInterval(() => {
       if (s.recorder.state !== 'recording') return;
@@ -464,7 +465,7 @@ function startMicMeter(s: EngineSession): void {
       for (const v of data) sum += v * v;
       internal.engineMicLevel(Math.sqrt(sum / data.length));
     }, 500);
-    micMeter = { ownedCtx, timer };
+    micMeter = { gain: s.micGain, analyser, timer };
   } catch {
     /* a dead meter is cosmetic; the recording matters more */
   }
@@ -473,7 +474,11 @@ function startMicMeter(s: EngineSession): void {
 function stopMicMeter(): void {
   if (!micMeter) return;
   clearInterval(micMeter.timer);
-  if (micMeter.ownedCtx && micMeter.ownedCtx.state !== 'closed') void micMeter.ownedCtx.close();
+  try {
+    micMeter.gain.disconnect(micMeter.analyser);
+  } catch {
+    /* context may already be closed */
+  }
   micMeter = null;
 }
 

@@ -289,6 +289,23 @@ export function Hud() {
         </svg>
       </HudButton>
 
+      {state.notesAvailable && (
+        <HudButton
+          label={state.notesOn ? 'Hide talking notes' : 'Show talking notes'}
+          hint={`${state.notesOn ? 'Hide notes' : 'Show notes'} ${prettyAccel(shortcuts.notes)}`}
+          onHint={setHint}
+          onClick={() => window.openloom.toggleNotes()}
+          active={!!state.notesOn}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" {...stroke} aria-hidden="true">
+            <path d="M6 3.5h9.5L19 7v13a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 20V5a1.5 1.5 0 0 1 1-1.5Z" />
+            <path d="M15 3.5V7h4" />
+            <path d="M8.5 12h7" />
+            <path d="M8.5 16h5" />
+          </svg>
+        </HudButton>
+      )}
+
       {state.drawOn && (
         <div className="hud-draw-tools">
           {PEN_COLORS.map((c) => (

@@ -314,20 +314,26 @@ test('Open Loom full E2E (SPEC §7)', async () => {
       for (const c of recChecks) record(c.name, c.ok, c.classification, c.detail);
       const recLanded = recChecks[0]?.ok ?? false;
       await shot(page, '06-recording-attempt.png');
-      // A recording that just landed auto-opens Watch with the YouTube publish
-      // panel already expanded (fresh-recording flow, DECISIONS 2026-07-13).
+      // A recording that just landed auto-opens Watch with the client link as
+      // the PRIMARY header action (Pass 3: share-first, YouTube demoted to the
+      // More menu). With no provider configured yet, no panel auto-opens; with
+      // one configured, the ShareDialog opens itself. Either way the primary
+      // button must read Share/Copy link, and the old auto-expanded YouTube
+      // panel must be gone.
       if (recLanded) {
-        const ytPanel = await page
-          .waitForSelector('.youtube-block', { timeout: 10_000 })
-          .then(() => true)
-          .catch(() => false);
+        const shareBtn = await page
+          .waitForSelector('.watch-head-actions .btn-primary', { timeout: 10_000 })
+          .then((el) => el.textContent())
+          .catch(() => null);
+        const sharePrimary = /Share|Copy link/i.test(shareBtn ?? '');
+        const ytAutoExpanded = (await page.locator('.youtube-block').count()) > 0;
         record(
-          'fresh recording lands on Watch with the publish panel expanded',
-          ytPanel,
-          ytPanel ? 'pass' : 'product-bug',
-          `youtube-block visible=${ytPanel}`
+          'fresh recording lands on Watch with the client link as the primary action',
+          sharePrimary && !ytAutoExpanded,
+          sharePrimary && !ytAutoExpanded ? 'pass' : 'product-bug',
+          `primary="${shareBtn}" youtube-auto-expanded=${ytAutoExpanded}`
         );
-        await shot(page, '06b-watch-publish-panel.png');
+        await shot(page, '06b-watch-share-primary.png');
         // A "guided publish" paste-back flow (save a pasted YouTube link, keep
         // the canonical watch URL, copy it) was tested here against
         // `youtubeSaveLink` / `youtubeReadClipboardLink`. Neither was ever

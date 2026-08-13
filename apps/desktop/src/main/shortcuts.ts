@@ -17,6 +17,7 @@ import {
   startRecording,
   stopRecording,
   toggleDraw,
+  toggleNotes,
   currentState,
 } from './recorder-ipc';
 import { broadcast, createMainWindow } from './windows';
@@ -71,6 +72,7 @@ const ACTIONS: Record<keyof ShortcutSettings, () => void> = {
   cancel: () => requestCancelRecording(),
   restart: () => requestRestartRecording(),
   draw: () => toggleDraw(!currentState().drawOn),
+  notes: () => toggleNotes(),
 };
 
 /** Validate a shortcut map: no empties, no duplicates. Returns error text or null. */

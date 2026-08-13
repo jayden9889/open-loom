@@ -75,6 +75,10 @@ export interface RecordingState {
    * take is paused and the HUD shows the redo panel with its escape hatch.
    */
   redoCountdown?: number;
+  /** The user typed talking notes for this take, so the HUD offers the toggle. */
+  notesAvailable?: boolean;
+  /** The notes overlay is currently on screen (toggleable; it can get in the way). */
+  notesOn?: boolean;
 }
 
 /** A crashed or interrupted recording found on disk at launch (crash recovery, SPEC R8). */
@@ -251,6 +255,8 @@ export interface ShortcutSettings {
   cancel: string;
   restart: string;
   draw: string;
+  /** Show/hide the talking-notes overlay mid-take (it can sit over content). */
+  notes: string;
 }
 
 export const DEFAULT_SHORTCUTS: ShortcutSettings = {
@@ -259,6 +265,7 @@ export const DEFAULT_SHORTCUTS: ShortcutSettings = {
   cancel: 'Alt+Shift+C',
   restart: 'CommandOrControl+Shift+R',
   draw: 'Control+1',
+  notes: 'Control+2',
 };
 
 /** Pre-2026-07-23 draw default; stored settings carrying it migrate to Control+1. */
@@ -672,6 +679,8 @@ export interface OpenLoomAPI {
   toggleCamera(on: boolean): void;
   toggleMic(on: boolean): void;
   toggleDraw(on: boolean): void;
+  /** Hide/show the talking-notes overlay mid-take without losing its position. */
+  toggleNotes(): void;
   /** Pen colour for the draw overlay ('red' | 'violet' | 'yellow'). */
   setDrawColor(color: string): void;
   /** Instantly wipe every stroke on the draw overlay. */
