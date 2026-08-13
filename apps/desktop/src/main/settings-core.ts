@@ -4,7 +4,7 @@
  * electron-store + safeStorage.
  */
 import type { Settings } from '@shared/types';
-import { DEFAULT_SHORTCUTS } from '@shared/types';
+import { DEFAULT_SHORTCUTS, NOTES_MAX_CHARS } from '@shared/types';
 
 export const SECRET_MASK = '••••••••';
 export const ENC_PREFIX = 'enc:v1:';
@@ -93,6 +93,23 @@ export function defaultSettings(saveDir: string): Settings {
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/**
+ * Field-level bounds the store enforces no matter who wrote the value (the
+ * launcher's maxLength, a hand-edited settings file, a future caller). Only
+ * the talking notes today: an unbounded string there bloats every settings
+ * read/write/broadcast.
+ */
+export function normalizeSettings(settings: Settings): Settings {
+  const notes = settings.recording.notes;
+  if (typeof notes === 'string' && notes.length > NOTES_MAX_CHARS) {
+    return {
+      ...settings,
+      recording: { ...settings.recording, notes: notes.slice(0, NOTES_MAX_CHARS) },
+    };
+  }
+  return settings;
 }
 
 /** Deep-merge `patch` into `base`, returning a new object. Arrays replace. */

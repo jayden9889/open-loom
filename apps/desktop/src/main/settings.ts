@@ -11,6 +11,7 @@ import { DEFAULT_SHORTCUTS, LEGACY_DRAW_SHORTCUT } from '@shared/types';
 import {
   defaultSettings,
   mergeSettings,
+  normalizeSettings,
   encryptSecretsInPatch,
   maskSecrets,
   decryptSecret,
@@ -93,8 +94,9 @@ function getStore(): Store<{ settings: Settings }> {
 }
 
 export function getSettings(): Settings {
-  // Merge over defaults so new fields added in updates are always present.
-  return mergeSettings(defaultSettings(defaultSaveDir()), getStore().get('settings'));
+  // Merge over defaults so new fields added in updates are always present;
+  // normalize catches out-of-bounds values in a hand-edited settings file.
+  return normalizeSettings(mergeSettings(defaultSettings(defaultSaveDir()), getStore().get('settings')));
 }
 
 /** Settings as sent to the renderer: secrets replaced with a mask. */
@@ -109,7 +111,8 @@ export function setSettings(patch: Partial<Settings>): Settings {
     current,
     codec
   ) as Partial<Settings>;
-  const next = mergeSettings(current, safePatch);
+  // Normalize BEFORE persisting, so an oversized value never reaches disk.
+  const next = normalizeSettings(mergeSettings(current, safePatch));
   getStore().set('settings', next);
   if (typeof patch.launchAtLogin === 'boolean') {
     applyLaunchAtLogin(next.launchAtLogin);

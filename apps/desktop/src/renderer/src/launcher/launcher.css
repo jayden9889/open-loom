@@ -268,3 +268,15 @@ body.launcher-body {
   outline: 2px solid var(--ol-accent);
   outline-offset: 1px;
 }
+
+.launcher-notes-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.launcher-notes-count {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.45);
+}

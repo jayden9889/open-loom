@@ -259,6 +259,14 @@ export interface ShortcutSettings {
   notes: string;
 }
 
+/**
+ * Ceiling on the talking notes. The overlay is a glance card for the prompt
+ * bullets of a ~3 minute proposal video (10-15 short lines), not a
+ * teleprompter script - and the whole string rides inside settings.json,
+ * which is read, written and broadcast as one blob.
+ */
+export const NOTES_MAX_CHARS = 500;
+
 export const DEFAULT_SHORTCUTS: ShortcutSettings = {
   startStop: 'CommandOrControl+Shift+L',
   pauseResume: 'Alt+Shift+P',

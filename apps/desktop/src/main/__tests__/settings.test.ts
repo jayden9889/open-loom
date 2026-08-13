@@ -13,8 +13,10 @@ import {
   encryptSecretsInPatch,
   maskSecrets,
   mergeSettings,
+  normalizeSettings,
   type SecretCodec,
 } from '../settings-core';
+import { NOTES_MAX_CHARS } from '@shared/types';
 
 const codec: SecretCodec = {
   encrypt: (p) => Buffer.from(p, 'utf8').toString('base64'),
@@ -129,5 +131,20 @@ describe('a locked keychain must not read as a signed-out account', () => {
 
   it('still treats a genuinely empty secret as empty rather than throwing', () => {
     expect(decryptSecret(defaultSettings('/x'), 'youtube.refreshToken', refusingCodec)).toBe('');
+  });
+});
+
+describe('normalizeSettings', () => {
+  it('clamps oversized talking notes to the glance-card ceiling', () => {
+    const s = defaultSettings('/tmp/lib');
+    s.recording.notes = 'x'.repeat(NOTES_MAX_CHARS * 3);
+    const out = normalizeSettings(s);
+    expect(out.recording.notes.length).toBe(NOTES_MAX_CHARS);
+  });
+
+  it('leaves in-bounds notes untouched (same object, no copy churn)', () => {
+    const s = defaultSettings('/tmp/lib');
+    s.recording.notes = 'Open with the win.';
+    expect(normalizeSettings(s)).toBe(s);
   });
 });

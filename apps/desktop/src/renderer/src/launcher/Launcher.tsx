@@ -14,6 +14,7 @@ import type {
   RecordingMode,
   Settings,
 } from '@shared/types';
+import { NOTES_MAX_CHARS } from '@shared/types';
 import { Icon } from '../components/icons';
 import { Segmented, Toggle, useToasts, cleanIpcError } from '../components/ui';
 import {
@@ -532,15 +533,25 @@ export function Launcher() {
       )}
 
       <div className="launcher-notes">
-        <label className="field-label" htmlFor="nr-notes">
-          Talking notes
-        </label>
+        <div className="launcher-notes-head">
+          <label className="field-label" htmlFor="nr-notes">
+            Talking notes
+          </label>
+          {/* The counter only appears once it matters; the cap keeps notes at
+              glanceable prompt bullets, not a script. */}
+          {notes.length >= NOTES_MAX_CHARS * 0.8 && (
+            <span className="launcher-notes-count">
+              {notes.length}/{NOTES_MAX_CHARS}
+            </span>
+          )}
+        </div>
         <textarea
           id="nr-notes"
           rows={2}
+          maxLength={NOTES_MAX_CHARS}
           placeholder="Jot what to say - it floats on screen while you record. Only you see it."
           value={notes}
-          onChange={(e) => saveNotes(e.target.value)}
+          onChange={(e) => saveNotes(e.target.value.slice(0, NOTES_MAX_CHARS))}
         />
       </div>
 
