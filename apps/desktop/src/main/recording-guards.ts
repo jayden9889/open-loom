@@ -14,6 +14,14 @@ export const LOW_FREE_BYTES = 1024 ** 3;
 export const CRITICAL_FREE_BYTES = 400 * 1024 ** 2;
 /** The engine emits a chunk every second; this much silence means it is dead or wedged. */
 export const CHUNK_WATCHDOG_MS = 5000;
+/**
+ * How long the FIRST chunk may take. A camera being handed over from another
+ * app (or waking from sleep) can hold MediaRecorder's muxer past the 5s
+ * steady-state fuse, and killing a take that is still warming up destroys a
+ * recording the user believes is running. Steady-state stalls stay on the
+ * short fuse - once chunks have flowed, a 5s gap really is a wedged engine.
+ */
+export const FIRST_CHUNK_GRACE_MS = 15_000;
 /** A cancelled take longer than this is kept recoverable instead of deleted. */
 export const KEEP_ON_CANCEL_MIN_SEC = 5;
 
@@ -39,14 +47,20 @@ export function freeSpaceVerdict(freeBytes: number): FreeSpaceVerdict {
 
 /**
  * True when a supposedly live recording has produced no chunks for too long -
- * a crashed or wedged engine renderer. Paused takes emit nothing on purpose,
- * and a take that has not produced its first chunk yet is covered by the
- * engine start timeout instead.
+ * a crashed or wedged engine renderer. Paused takes emit nothing on purpose.
+ * Until the first chunk lands the longer FIRST_CHUNK_GRACE_MS applies: the
+ * engine has confirmed start, but a contended camera can hold the muxer's
+ * first output past the steady-state fuse without anything being broken.
  */
-export function chunkWatchdogTripped(status: RecordingStatus, lastChunkAt: number, now: number): boolean {
+export function chunkWatchdogTripped(
+  status: RecordingStatus,
+  lastChunkAt: number,
+  now: number,
+  sawFirstChunk: boolean = true
+): boolean {
   if (status !== 'recording') return false;
   if (lastChunkAt <= 0) return false;
-  return now - lastChunkAt > CHUNK_WATCHDOG_MS;
+  return now - lastChunkAt > (sawFirstChunk ? CHUNK_WATCHDOG_MS : FIRST_CHUNK_GRACE_MS);
 }
 
 /**

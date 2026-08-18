@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CHUNK_WATCHDOG_MS,
+  FIRST_CHUNK_GRACE_MS,
   CRITICAL_FREE_BYTES,
   KEEP_ON_CANCEL_MIN_SEC,
   LOW_FREE_BYTES,
@@ -81,6 +82,17 @@ describe('chunkWatchdogTripped', () => {
   it('ignores countdown and processing states', () => {
     expect(chunkWatchdogTripped('countdown', now - 60_000, now)).toBe(false);
     expect(chunkWatchdogTripped('processing', now - 60_000, now)).toBe(false);
+  });
+
+  it('gives a contended camera the warm-up grace before the first chunk', () => {
+    // 5s of nothing right after start is a camera still being handed over,
+    // not a wedged engine - the short fuse would execute a healthy take.
+    expect(chunkWatchdogTripped('recording', now - CHUNK_WATCHDOG_MS - 1, now, false)).toBe(false);
+    expect(chunkWatchdogTripped('recording', now - FIRST_CHUNK_GRACE_MS - 1, now, false)).toBe(true);
+  });
+
+  it('keeps the short fuse once chunks have flowed', () => {
+    expect(chunkWatchdogTripped('recording', now - CHUNK_WATCHDOG_MS - 1, now, true)).toBe(true);
   });
 });
 

@@ -103,6 +103,8 @@ interface ActiveRecording {
   cancelled: boolean;
   /** Last time an engine:chunk landed; feeds the dead-engine watchdog. */
   lastChunkAt: number;
+  /** First chunk landed - switches the watchdog from warm-up grace to the short fuse. */
+  sawFirstChunk: boolean;
   /** One low-disk warning per session, not one per tick. */
   lowDiskWarned: boolean;
   /** One camera-loss warning per session. */
@@ -299,7 +301,7 @@ function startTick(): void {
       // Dead-engine watchdog: the HUD must never count over a take that is no
       // longer being captured. Chunks arrive every second; a silent engine is
       // crashed or wedged either way, and the user needs to know NOW.
-      if (chunkWatchdogTripped(active.status, active.lastChunkAt, Date.now())) {
+      if (chunkWatchdogTripped(active.status, active.lastChunkAt, Date.now(), active.sawFirstChunk)) {
         log.error(`no chunks for ${Date.now() - active.lastChunkAt}ms; treating the take as broken`);
         failActiveRecording(
           'Recording stopped: the capture engine stopped responding. Everything captured up to now is saved - recover it from the library.'
@@ -446,6 +448,7 @@ export async function startRecording(opts: RecordingOptions): Promise<void> {
     drawOn: false,
     cancelled: false,
     lastChunkAt: 0,
+    sawFirstChunk: false,
     lowDiskWarned: false,
     cameraLostNotified: false,
     redoCuts: [],
@@ -915,6 +918,7 @@ async function startRecordingWithoutCountdown(opts: RecordingOptions): Promise<v
     drawOn: false,
     cancelled: false,
     lastChunkAt: 0,
+    sawFirstChunk: false,
     lowDiskWarned: false,
     cameraLostNotified: false,
     redoCuts: [],
@@ -1260,6 +1264,7 @@ export function registerEngineIpc(): void {
     // stream error path for a take that already saved cleanly.
     if (!rec || rec.stream.writableEnded || rec.stream.destroyed) return;
     rec.lastChunkAt = Date.now();
+    rec.sawFirstChunk = true;
     rec.stream.write(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength));
   });
 
