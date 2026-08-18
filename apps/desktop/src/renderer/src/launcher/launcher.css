@@ -313,6 +313,18 @@ body.launcher-body {
   flex-shrink: 0;
 }
 
+/* The two modes split the full row - a half-empty pill with dead space to its
+   right reads as unfinished, and the choice deserves the whole width. */
+.launcher-mode .segmented {
+  display: flex;
+  width: 100%;
+}
+
+.launcher-mode .segmented .segment {
+  flex: 1;
+  justify-content: center;
+}
+
 /* Scroll affordance: the source list scrolls under the pinned lower panel,
    and without a fade the clipped row reads as "loading never finished". */
 .launcher-sources-scroll {
