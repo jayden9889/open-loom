@@ -8,6 +8,7 @@
 import { desktopCapturer, session } from 'electron';
 import type { CaptureSource } from '@shared/types';
 import { systemAudioSupported } from './permissions';
+import { isOwnWindowTitle } from './permissions-core';
 import { log } from './logger';
 
 interface PendingCapture {
@@ -74,8 +75,7 @@ export function installDisplayMediaHandler(): void {
   );
 }
 
-/** Names of our own overlay windows, filtered out of the window picker. */
-const OWN_WINDOW_TITLES = new Set(['Open Loom', 'openloom-hud', 'openloom-bubble', 'openloom-countdown', 'openloom-draw', 'openloom-engine']);
+
 
 export async function listCaptureSources(): Promise<CaptureSource[]> {
   const sources = await desktopCapturer.getSources({
@@ -87,7 +87,7 @@ export async function listCaptureSources(): Promise<CaptureSource[]> {
   const result: CaptureSource[] = [];
   for (const s of sources) {
     const isDisplay = s.id.startsWith('screen:');
-    if (!isDisplay && OWN_WINDOW_TITLES.has(s.name)) continue;
+    if (!isDisplay && isOwnWindowTitle(s.name)) continue;
     if (!isDisplay && !s.name.trim()) continue;
     result.push({
       id: s.id,

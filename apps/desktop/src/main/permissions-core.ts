@@ -15,10 +15,12 @@
 
 /**
  * Windows created by Open Loom itself. Their titles are always visible to us,
- * grant or no grant, so they must never count as evidence.
- * Mirrors the window set in capture.ts (main window + the openloom-* overlays).
+ * grant or no grant, so they must never count as evidence - and the source
+ * picker (capture.ts) uses the same predicate so the app never lists itself
+ * as something to record. One rule, both callers: a hard-coded mirror list
+ * already drifted once and leaked the launcher panel into the picker.
  */
-function isOwnWindowTitle(title: string): boolean {
+export function isOwnWindowTitle(title: string): boolean {
   return title === 'Open Loom' || title === 'Open Loom Recorder' || title.startsWith('openloom-');
 }
 

@@ -4,7 +4,7 @@
  * lack of one; anything else is honestly unknown.
  */
 import { describe, expect, it } from 'vitest';
-import { bitmapChannelSpread, classifyScreenProbe } from '../permissions-core';
+import { bitmapChannelSpread, classifyScreenProbe, isOwnWindowTitle } from '../permissions-core';
 
 describe('classifyScreenProbe', () => {
   it('a foreign window title proves the grant is active', () => {
@@ -56,5 +56,19 @@ describe('bitmapChannelSpread', () => {
     // Documented here so nobody reintroduces "not black means granted".
     const wallpaper = new Uint8Array([...px(20, 60, 120), ...px(240, 180, 40)]);
     expect(bitmapChannelSpread(wallpaper)).toBeGreaterThan(6);
+  });
+});
+
+describe('isOwnWindowTitle', () => {
+  it('catches every Open Loom window, including the launcher panel that once leaked', () => {
+    for (const t of ['Open Loom', 'Open Loom Recorder', 'openloom-launcher', 'openloom-hud', 'openloom-notes', 'openloom-switcher']) {
+      expect(isOwnWindowTitle(t)).toBe(true);
+    }
+  });
+
+  it('leaves other apps recordable', () => {
+    for (const t of ['Google Chrome', 'Loom', 'Open Loops - Notion', '']) {
+      expect(isOwnWindowTitle(t)).toBe(false);
+    }
   });
 });
