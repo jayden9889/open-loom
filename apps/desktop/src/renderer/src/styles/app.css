@@ -58,6 +58,27 @@ textarea {
   background: var(--ol-accent-soft);
 }
 
+/* Thin, quiet scrollbars: default Chromium bars read as unfinished chrome. */
+::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--ol-border-strong);
+  background-clip: padding-box;
+  border: 3px solid transparent;
+  border-radius: var(--ol-radius-pill);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--ol-text-tertiary);
+}
+
 .boot {
   height: 100%;
   background: var(--ol-bg);
@@ -93,8 +114,15 @@ textarea {
   cursor: pointer;
   transition:
     background var(--ol-dur-fast) var(--ol-ease),
-    border-color var(--ol-dur-fast) var(--ol-ease);
+    border-color var(--ol-dur-fast) var(--ol-ease),
+    transform var(--ol-dur-fast) var(--ol-ease);
   white-space: nowrap;
+}
+
+.btn-primary:active:not(:disabled),
+.btn-secondary:active:not(:disabled),
+.btn-danger:active:not(:disabled) {
+  transform: scale(0.98);
 }
 
 .btn-primary {
@@ -108,7 +136,8 @@ textarea {
 
 .btn-secondary {
   background: var(--ol-surface);
-  border-color: var(--ol-border-strong);
+  border-color: var(--ol-border);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
 }
 
 .btn-secondary:hover:not(:disabled) {
@@ -131,11 +160,11 @@ textarea {
 .btn-danger-quiet {
   background: transparent;
   color: var(--ol-danger);
-  border-color: var(--ol-border);
+  border-color: transparent;
 }
 
 .btn-danger-quiet:hover:not(:disabled) {
-  border-color: var(--ol-danger);
+  background: rgba(255, 69, 58, 0.1);
 }
 
 .btn-primary:disabled,
@@ -337,7 +366,7 @@ textarea {
   margin: 0;
   font-size: var(--ol-text-xl);
   font-weight: 700;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.022em;
 }
 
 .view-head-title {
@@ -882,6 +911,7 @@ textarea {
   border: 1px solid var(--ol-border-strong);
   border-radius: var(--ol-radius-card);
   max-height: calc(100vh - 64px);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.18);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -947,8 +977,7 @@ textarea {
   background: var(--ol-surface);
   color: var(--ol-text);
   font-weight: 600;
-  border: 1px solid var(--ol-border);
-  padding: 5px 11px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14);
 }
 
 .segment:focus-visible {
@@ -1886,6 +1915,13 @@ textarea {
   margin: 0;
 }
 
+/* Destructive action sits at the foot of the details panel, out of the way
+   of the metadata it would otherwise shout over. */
+.side-panel > .btn-danger-quiet {
+  margin-top: auto;
+  align-self: center;
+}
+
 .side-empty-state {
   display: flex;
   flex-direction: column;
@@ -1929,6 +1965,7 @@ textarea {
   margin: 0;
   font-weight: 500;
   text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .cue-list {
@@ -2122,6 +2159,10 @@ textarea {
   gap: 18px;
   padding: 13px 0;
   border-bottom: 1px solid var(--ol-border);
+}
+
+.settings-row:last-child {
+  border-bottom: none;
 }
 
 .settings-row-text {
@@ -2400,8 +2441,8 @@ textarea {
 }
 
 .tl-handle:focus-visible {
-  outline: var(--ol-focus-ring);
-  outline-offset: 1px;
+  outline: none;
+  box-shadow: var(--ol-focus-ring);
 }
 
 /* Full-width layer moved with translateX(%) so the per-frame playhead update
@@ -2535,7 +2576,8 @@ textarea {
 }
 
 .add-clip-item:focus-visible {
-  outline: var(--ol-focus-ring);
+  outline: none;
+  box-shadow: var(--ol-focus-ring);
 }
 
 .add-clip-item img {
@@ -2704,7 +2746,8 @@ textarea {
 }
 
 .task-text:focus-visible {
-  outline: var(--ol-focus-ring);
+  outline: none;
+  box-shadow: var(--ol-focus-ring);
 }
 
 .modal-note {
