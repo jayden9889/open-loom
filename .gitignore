@@ -22,3 +22,7 @@ test-assets/
 # Local render sources for the release videos (published as release assets)
 docs/media/new-videos/
 docs/media/open-loom-facefirst.mp4
+
+# Self-hosted share server data dir - writes a live api-key.txt
+openloom-data/
+*.bak

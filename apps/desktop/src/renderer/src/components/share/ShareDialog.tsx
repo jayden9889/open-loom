@@ -230,7 +230,7 @@ export function ShareDialog({ video, onClose, onChange, onOpenSharingSettings, o
               {(uploading || uploadFailed) && upload && (
                 <div className="shr-progress">
                   <div className="shr-progress-track">
-                    <div className="shr-progress-fill" style={{ width: `${uploadFailed ? 100 : upload.pct}%` }} />
+                    <div className="shr-progress-fill" style={{ transform: `scaleX(${(uploadFailed ? 100 : upload.pct) / 100})` }} />
                   </div>
                   <span className={`shr-progress-note${uploadFailed ? ' failed' : ''}`}>
                     {uploadFailed ? upload.note : `${upload.note ?? 'Uploading'} (${upload.pct}%)`}

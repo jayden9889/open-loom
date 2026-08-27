@@ -1365,7 +1365,7 @@ export function EditorView({
             <div className="job-text">
               <strong>{cancelling ? 'Stopping…' : (job?.note ?? 'Working on the edit')}</strong>
               <div className="job-bar">
-                <div className="job-bar-fill" style={{ width: `${job?.pct ?? 5}%` }} />
+                <div className="job-bar-fill" style={{ transform: `scaleX(${(job?.pct ?? 5) / 100})` }} />
               </div>
             </div>
             {job && ['trim', 'stitch'].includes(job.kind) && (

@@ -233,12 +233,19 @@ body {
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
 }
 
+/* The level arrives from the engine every 500ms (engine.ts mic sampler), so
+   the transition has to carry the bar for the WHOLE gap, and it has to be
+   linear. At 320ms ease-out the bar decelerated, landed, then sat dead still
+   for 180ms before jumping to the next sample: that pause is what reads as
+   stepping. Linear over the full interval means each sample glides straight
+   into the next and the bar never stops moving. */
 .hud-mic-meter-fill {
   height: 100%;
   border-radius: 3px;
   background: var(--ol-success);
   transform-origin: left;
-  transition: transform 320ms ease-out;
+  transition: transform 500ms linear;
+  will-change: transform;
 }
 
 /* ------------------------------------------- confirm + redo panels */

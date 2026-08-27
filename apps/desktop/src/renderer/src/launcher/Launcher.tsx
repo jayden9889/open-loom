@@ -161,7 +161,23 @@ function MicMeter({ deviceId, enabled }: { deviceId: string; enabled: boolean })
         analyser.fftSize = 512;
         source.connect(analyser);
         const data = new Uint8Array(analyser.frequencyBinCount);
-        const tick = () => {
+        // Meter ballistics. Raw RMS is noisy frame to frame, so writing it
+        // straight to the DOM made the bar strobe rather than move. The shown
+        // value chases the real level by exponential smoothing (a lerp toward
+        // the target), with a fast attack so a word registers the instant you
+        // speak and a slow release so it glides back instead of snapping.
+        // Time constants are in seconds and the step is derived from the frame
+        // delta, so it behaves identically on a 60Hz and a 120Hz display
+        // rather than moving twice as fast on the latter.
+        const ATTACK_TAU = 0.05;
+        const RELEASE_TAU = 0.25;
+        let shown = 0;
+        let last = performance.now();
+        const tick = (now: number) => {
+          // Clamp the delta so a backgrounded tab returning does not teleport
+          // the bar on its first frame back.
+          const dt = Math.min(100, now - last) / 1000;
+          last = now;
           analyser.getByteTimeDomainData(data);
           let sum = 0;
           for (const v of data) {
@@ -169,14 +185,18 @@ function MicMeter({ deviceId, enabled }: { deviceId: string; enabled: boolean })
             sum += c * c;
           }
           const level = Math.min(1, Math.sqrt(sum / data.length) * 3);
+          // "Did we hear you" reads the RAW level, not the smoothed one, so the
+          // reassurance still fires the moment you speak.
           if (level > 0.12 && !heardRef.current) {
             heardRef.current = true;
             setHeard(true);
           }
-          if (fillRef.current) fillRef.current.style.transform = `scaleX(${level})`;
+          const tau = level > shown ? ATTACK_TAU : RELEASE_TAU;
+          shown += (level - shown) * (1 - Math.exp(-dt / tau));
+          if (fillRef.current) fillRef.current.style.transform = `scaleX(${shown.toFixed(4)})`;
           raf = requestAnimationFrame(tick);
         };
-        tick();
+        raf = requestAnimationFrame(tick);
       } catch {
         if (!cancelled) setError('Microphone unavailable');
       }

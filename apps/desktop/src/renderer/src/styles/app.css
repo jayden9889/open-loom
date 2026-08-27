@@ -1200,6 +1200,13 @@ textarea {
   white-space: nowrap;
 }
 
+/* Shown in place of the meter when the mic cannot be opened. Deleted by a
+   dead-CSS sweep that mis-read its usage; Launcher.tsx has always rendered it. */
+.mic-meter-error {
+  font-size: var(--ol-text-sm);
+  color: var(--ol-danger);
+}
+
 .mic-meter {
   height: 5px;
   border-radius: var(--ol-radius-pill);
@@ -2381,11 +2388,21 @@ textarea {
   overflow: hidden;
 }
 
+/* Linear progress indicator. Driven by transform, never width: width is a
+   layout property, so animating it reflowed the panel on every progress tick.
+   scaleX is compositor-only, so the bar glides without touching layout. */
 .job-bar-fill {
   height: 100%;
+  width: 100%;
   background: var(--ol-accent);
   border-radius: var(--ol-radius-pill);
-  transition: width var(--ol-dur) var(--ol-ease);
+  transform: scaleX(0);
+  transform-origin: left center;
+  /* linear, not --ol-ease: a decelerate curve is right for a menu opening and
+     wrong for a bar chasing a stream of progress ticks, because every tick
+     visibly slows and lands. Duration covers the gap between ticks. */
+  transition: transform 600ms linear;
+  will-change: transform;
 }
 
 /* Add clip picker */

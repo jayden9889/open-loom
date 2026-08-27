@@ -40,7 +40,8 @@
 
 .shr-progress { display: flex; flex-direction: column; gap: var(--ol-space-1); }
 .shr-progress-track { height: 4px; border-radius: var(--ol-radius-pill); background: var(--ol-border); overflow: hidden; }
-.shr-progress-fill { height: 100%; background: var(--ol-accent); border-radius: var(--ol-radius-pill); transition: width 180ms var(--ol-ease); }
+/* Linear progress indicator: transform, not width (see .job-bar-fill). */
+.shr-progress-fill { height: 100%; width: 100%; background: var(--ol-accent); border-radius: var(--ol-radius-pill); transform: scaleX(0); transform-origin: left center; transition: transform 600ms linear; will-change: transform; }
 .shr-progress-note { font-size: var(--ol-text-xs); color: var(--ol-text-secondary); }
 .shr-progress-note.failed { color: var(--ol-danger); }
 

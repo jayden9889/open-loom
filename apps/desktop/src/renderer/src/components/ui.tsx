@@ -262,7 +262,17 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
   } | null>(null);
 
   const confirm = useCallback<ConfirmFn>(
-    (opts) => new Promise<boolean>((resolve) => setPending({ opts, resolve })),
+    (opts) =>
+      new Promise<boolean>((resolve) => {
+        setPending((cur) => {
+          // Opening a second confirm while one is still up used to drop the
+          // first pending promise on the floor, leaving its caller awaiting
+          // forever. Settle the one being replaced as a cancel first: nothing
+          // destructive ever proceeds on a question the user never saw.
+          if (cur) cur.resolve(false);
+          return { opts, resolve };
+        });
+      }),
     []
   );
 

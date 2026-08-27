@@ -1010,7 +1010,7 @@ export function WatchView({
                               : `Uploading to YouTube… ${youtubePct}%`}
                         </span>
                         <div className="job-bar">
-                          <div className="job-bar-fill" style={{ width: `${youtubePct ?? 0}%` }} />
+                          <div className="job-bar-fill" style={{ transform: `scaleX(${(youtubePct ?? 0) / 100})` }} />
                         </div>
                       </div>
                       <button type="button" className="btn-secondary" onClick={cancelYouTubeUpload}>
@@ -1276,7 +1276,7 @@ export function WatchView({
                   <span className="spinner" aria-hidden="true" />
                   <span>{runningJob.note ?? 'Transcribing'}</span>
                   <div className="job-bar">
-                    <div className="job-bar-fill" style={{ width: `${runningJob.pct}%` }} />
+                    <div className="job-bar-fill" style={{ transform: `scaleX(${runningJob.pct / 100})` }} />
                   </div>
                 </div>
               )}
