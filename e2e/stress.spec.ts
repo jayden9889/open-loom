@@ -22,7 +22,7 @@
  * the rest. No product code is touched. Capture-dependent checks classify as
  * 'environment' when the OS blocks real screen/camera capture.
  */
-import { test, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
+import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -34,9 +34,17 @@ const REPORT = path.join(REPO, 'test-results/stress-report.json');
 
 // Bubble diameters per size preset (packages/shared/types.ts BUBBLE_SIZES).
 const BUBBLE_SIZES: Record<string, number> = { S: 160, M: 240, L: 320 };
-// windows.ts SWITCHER_SIZE / HUD_SIZE / HUD_DRAW_EXTRA.
+// Mirrors of windows.ts SWITCHER_SIZE / HUD_SIZE / HUD_DRAW_EXTRA. They cannot
+// be imported: windows.ts pulls in electron, which does not resolve in the
+// Playwright runner's Node process.
+//
+// HUD_HEIGHT drifted here once, sitting at 388 long after windows.ts moved to
+// 552. Because this spec had no assertions at the time, the resulting two
+// "product-bug" lines were written into the report and the run still went
+// green, so nobody found out. Keep these in step with windows.ts; the guard
+// below is what makes a drift loud instead of silent.
 const SWITCHER_SIZE = { width: 300, height: 56 };
-const HUD_HEIGHT = 388;
+const HUD_HEIGHT = 552;
 const HUD_DRAW_EXTRA = 155;
 
 type Classification = 'pass' | 'product-bug' | 'test-bug' | 'environment';
@@ -362,10 +370,16 @@ test('Open Loom stress: camera-layout switcher + instant-facecam', async () => {
 
           // ---- draw flow (bubble layout) -------------------------------------
           try {
+            const hudBefore = (await winInfo(app, 'hud.html'))?.bounds.height;
             await page.evaluate(() => window.openloom.toggleDraw(true));
             await page.waitForTimeout(300);
             const on = await state();
             const hud = await winInfo(app, 'hud.html');
+            // Catch a drifted mirror as a TEST bug rather than blaming the app:
+            // the collapsed HUD we measured a moment ago is the source of truth.
+            if (hudBefore && !approx(hudBefore, HUD_HEIGHT, 4)) {
+              record('HUD_HEIGHT mirror matches windows.ts', false, 'test-bug', `spec=${HUD_HEIGHT} app=${hudBefore}`);
+            }
             const hudExpanded = !!hud && approx(hud.bounds.height, HUD_HEIGHT + HUD_DRAW_EXTRA, 4);
             record('toggleDraw(true): drawOn true + HUD expands', on.drawOn === true && hudExpanded, on.drawOn === true && hudExpanded ? 'pass' : 'product-bug', `drawOn=${on.drawOn} hudHeight=${hud?.bounds.height}`);
             const drawWin = await windowExists(app, 'draw.html');
@@ -584,4 +598,23 @@ test('Open Loom stress: camera-layout switcher + instant-facecam', async () => {
     console.log('\n===== STRESS REPORT =====');
     for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'} [${c.classification}] ${c.name}${c.detail ? ' :: ' + c.detail : ''}`);
   }
+
+  // This spec recorded a detailed report and then passed unconditionally: it
+  // contained no assertion at all, so a real regression showed up as FAIL text
+  // inside a green run and nobody would see it. The report is still the useful
+  // artefact, but a product bug now fails the suite.
+  //
+  // Only 'product-bug' is a gate. 'environment' covers a machine without a
+  // Screen Recording grant or without a display source, which must not redden
+  // someone else's checkout, and 'test-bug' is the harness's own fault.
+  const productBugs = checks.filter((c) => !c.ok && c.classification === 'product-bug');
+  expect(
+    productBugs.map((c) => `${c.name}${c.detail ? ' :: ' + c.detail : ''}`),
+    'stress run found product bugs'
+  ).toEqual([]);
+
+  // A run where nothing could be exercised is not a pass either: it means the
+  // spec silently checked nothing, which is the failure mode this whole block
+  // exists to stop.
+  expect(checks.some((c) => c.ok), 'stress run exercised at least one check').toBe(true);
 });
