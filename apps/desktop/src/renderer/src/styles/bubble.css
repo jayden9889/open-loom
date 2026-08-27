@@ -58,6 +58,25 @@ body {
   display: none;
 }
 
+/*
+ * The bubble is the one overlay window deliberately NOT capture-excluded: the
+ * face is meant to be in the recording. These controls are inside it, so the
+ * hover reveal below put four buttons into the client's delivered video the
+ * moment the cursor crossed your own face. Using them mid-take damaged the very
+ * video they were meant to adjust, so they were never usable there anyway.
+ *
+ * Hidden outright once the camera is live. They stay available beforehand,
+ * while the bubble is being positioned and nothing is being recorded.
+ *
+ * The fuller fix is to move size and mirror onto the HUD, which IS
+ * capture-excluded and is where PRODUCT.md says mid-recording controls belong.
+ * That is a UI addition rather than a safety fix, so it is tracked separately.
+ */
+.bubble.live .bubble-controls,
+.bubble.live:hover .bubble-controls {
+  display: none;
+}
+
 #bubble-video {
   width: 100%;
   height: 100%;
