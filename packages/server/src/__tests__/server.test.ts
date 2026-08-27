@@ -206,6 +206,48 @@ describe('openloom-server full flow', () => {
     expect(rejected.status).toBe(400);
   });
 
+  it('a viewId already used on another video is dropped, not a 500', async () => {
+    // views.id is the PRIMARY KEY on its own. Looking an existing view up by
+    // (id, video_id) made a viewId seen on ANOTHER video look brand new, and
+    // the INSERT then hit the key and threw an unhandled 500 out of a public
+    // endpoint. Reproduced live against a running server before the fix.
+    // Uses two throwaway videos so the shared fixture's view counts stay put.
+    const A = 'itest90001';
+    const B = 'itest90002';
+    for (const id of [A, B]) {
+      const made = await fetch(`${server.baseUrl}/api/videos`, {
+        method: 'POST',
+        headers: auth(true),
+        body: JSON.stringify({ id, title: `Collision ${id}`, durationSec: 4 }),
+      });
+      expect(made.status).toBe(201);
+    }
+
+    const beaconTo = (videoId: string) =>
+      fetch(`${server.baseUrl}/v/${videoId}/beacon`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          viewId: 'shared-view-across',
+          sessionId: 'session-shared',
+          positionSec: 1,
+          coverage: [0, 1],
+        }),
+      });
+
+    expect((await beaconTo(A)).status).toBe(204);
+    // Previously threw SQLITE_CONSTRAINT_PRIMARYKEY and answered 500.
+    expect((await beaconTo(B)).status).toBe(204);
+
+    const seen = async (id: string): Promise<number> => {
+      const res = await fetch(`${server.baseUrl}/api/videos/${id}/activity`, { headers: auth() });
+      return ((await res.json()) as { views: number }).views;
+    };
+    expect(await seen(A)).toBe(1);
+    // B must not inherit a view that belongs to A.
+    expect(await seen(B)).toBe(0);
+  });
+
   it('aggregates beacons into activity with completion and coverage', async () => {
     const beacon = (viewId: string, sessionId: string, body: Record<string, unknown>) =>
       fetch(`${server.baseUrl}/v/${VIDEO_ID}/beacon`, {

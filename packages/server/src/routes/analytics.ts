@@ -64,9 +64,16 @@ export function beaconRoutes(
       ? (body.coverage as unknown[]).slice(0, COVERAGE_BUCKETS)
       : [];
 
-    const existing = ctx.db
-      .prepare('SELECT * FROM views WHERE id = ? AND video_id = ?')
-      .get(viewId, video.id) as ViewRow | undefined;
+    // views.id is the PRIMARY KEY on its own, so this lookup must be by id
+    // alone. Scoping it to (id, video_id) made a viewId already used on ANOTHER
+    // video look brand new, and the INSERT below then hit the key and threw an
+    // unhandled 500 out of a public endpoint. The real client mints a fresh
+    // random viewId per page load, so only a crafted request gets here; a
+    // beacon is best-effort telemetry either way, so ack and drop it.
+    const existing = ctx.db.prepare('SELECT * FROM views WHERE id = ?').get(viewId) as
+      | ViewRow
+      | undefined;
+    if (existing && existing.video_id !== video.id) return c.body(null, 204);
     const now = nowIso();
 
     const coverage = existing ? parseCoverage(existing.coverage_json) : new Array<boolean>(COVERAGE_BUCKETS).fill(false);
