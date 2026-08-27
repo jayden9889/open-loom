@@ -269,6 +269,18 @@ export function currentState(): RecordingState {
   return lastState;
 }
 
+/**
+ * Bytes of real capture sitting in a session's temp dir. The single question
+ * every cleanup path has to ask before it deletes anything.
+ */
+function chunkBytesOnDisk(dir: string): number {
+  try {
+    return fs.statSync(path.join(dir, 'chunks.bin')).size;
+  } catch {
+    return 0;
+  }
+}
+
 function writeManifest(rec: ActiveRecording, status: 'recording' | 'completed'): void {
   const manifest = {
     tempId: rec.tempId,
@@ -866,7 +878,9 @@ export async function cancelRecording(opts?: { quiet?: boolean }): Promise<void>
       notifyUser('info', 'Recording discarded. It is kept for now in case that was a slip - recover or delete it from the library.');
     }
   } else {
-    await hardResetSession(rec);
+    // Deliberate cancel of a take under the keep threshold: this is the one
+    // path where the user really is saying "throw it away".
+    await hardResetSession(rec, undefined, { discardChunks: true });
   }
   log.info(`recording cancelled${keep ? ' (kept recoverable)' : ''}`);
 }
@@ -948,7 +962,11 @@ async function startRecordingWithoutCountdown(opts: RecordingOptions): Promise<v
  * 20s timer, a late stream error) must only ever clean up its own temp files,
  * never tear down - let alone delete - a live session that replaced it.
  */
-async function hardResetSession(rec: ActiveRecording | null, error?: string): Promise<void> {
+async function hardResetSession(
+  rec: ActiveRecording | null,
+  error?: string,
+  opts?: { discardChunks?: boolean }
+): Promise<void> {
   const owns = rec !== null && active === rec;
   if (rec) clearTransientPanels(rec);
   if (owns) {
@@ -959,10 +977,26 @@ async function hardResetSession(rec: ActiveRecording | null, error?: string): Pr
   }
   if (rec) {
     await endStreamSafe(rec.stream);
-    try {
-      fs.rmSync(rec.dir, { recursive: true, force: true });
-    } catch (err) {
-      log.warn(`temp cleanup failed: ${String(err)}`);
+    // THE RULE: an error path never deletes captured video. Only an explicit
+    // discard may - a deliberate cancel of a take too short to matter, or the
+    // user pressing Discard on the recovery banner. Everything else parks the
+    // capture as recoverable, so a failure anywhere in the pipeline can cost
+    // you the session but never the footage. This used to be an unconditional
+    // rmSync, which meant any stream error, engine timeout or failed start
+    // took the whole take with it and said nothing.
+    const captured = chunkBytesOnDisk(rec.dir);
+    if (!opts?.discardChunks && captured > 0) {
+      writeManifest(rec, 'recording');
+      broadcastRecoverablesChanged();
+      log.warn(
+        `session reset with ${captured} bytes captured; parked as recoverable (${rec.tempId})`
+      );
+    } else {
+      try {
+        fs.rmSync(rec.dir, { recursive: true, force: true });
+      } catch (err) {
+        log.warn(`temp cleanup failed: ${String(err)}`);
+      }
     }
   }
   if (owns || active === null) {
@@ -1430,6 +1464,49 @@ export async function processCaptureFile(input: {
   // video.mp4 exists and is valid from here on. Probing it for exact dimensions
   // is best-effort too: fall back to what we know rather than losing the video.
   const info = await ffmpeg.probe(bins, finalPath).catch(() => null);
+
+  // A finished recording is an ASSET. It does not get filed in the library
+  // unless it is genuinely playable.
+  //
+  // Recovering a capture that only ever flushed a few hundred bytes produced a
+  // 262-byte MP4: a container header, no video stream, duration N/A. The meta
+  // below papers over exactly that with `?? 0` and `Math.max(1, ...)`, so it
+  // was stored as a normal-looking recording with durationSec 0, and clicking
+  // it in the library gave "This video file could not be played". A dud that
+  // looks like a take is worse than an honest failure, because the user
+  // believes the recording happened.
+  //
+  // Throwing here also protects the footage: recoverRecording only deletes the
+  // staging dir AFTER this resolves, so a capture that cannot be turned into a
+  // playable file stays recoverable instead of being spent on a dud.
+  const playable =
+    info !== null &&
+    info.width > 0 &&
+    info.height > 0 &&
+    Number.isFinite(info.durationSec) &&
+    info.durationSec > 0;
+  if (!playable) {
+    const size = (() => {
+      try {
+        return fs.statSync(finalPath).size;
+      } catch {
+        return 0;
+      }
+    })();
+    log.error(
+      `${videoId}: refusing to file an unplayable capture (${size} bytes, probe=${
+        info ? JSON.stringify({ w: info.width, h: info.height, d: info.durationSec }) : 'failed'
+      })`
+    );
+    try {
+      fs.rmSync(videoDir, { recursive: true, force: true });
+    } catch {
+      /* best effort: the library must not keep a half-written entry */
+    }
+    throw new Error(
+      'That capture did not contain any playable video, so it has not been added to your library. The original recording is kept so you can try again.'
+    );
+  }
 
   // Sync guard: a healthy take muxes audio and video to within a few ms. A
   // materially shorter audio track means the capture dropped samples and the

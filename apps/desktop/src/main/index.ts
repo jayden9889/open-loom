@@ -8,7 +8,7 @@ import { app, BrowserWindow, dialog } from 'electron';
 import { registerScheme, installProtocolHandler } from './protocol';
 import { installDisplayMediaHandler, installPermissionHandlers } from './capture';
 import { registerIpc } from './ipc';
-import { registerEngineIpc, isRecordingActive } from './recorder-ipc';
+import { registerEngineIpc, isRecordingActive, installQuitGuard } from './recorder-ipc';
 import { createMainWindow, showLauncher } from './windows';
 import { getSettings } from './settings';
 import { ensureFfmpeg } from './ffmpeg';
@@ -47,6 +47,10 @@ if (!gotLock) {
     installDisplayMediaHandler();
     registerIpc();
     registerEngineIpc();
+    // Written for exactly this and then never called, so quitting mid-take
+    // went through silently and the capture survived only as a crash
+    // recoverable, minus whatever the write stream still had buffered.
+    installQuitGuard();
     createMainWindow();
     // Open straight into the recording launcher (left edge of the screen);
     // first run stays on the Setup view, which opens the launcher when done.
