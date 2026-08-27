@@ -59,6 +59,72 @@ function dedupeDevices(devices: MediaDeviceInfoLite[]): MediaDeviceInfoLite[] {
   return out;
 }
 
+/**
+ * Is this an iPhone or iPad acting as the camera (Apple Continuity Camera)?
+ * Used to label the option and to keep it OUT of the default slot.
+ */
+export function isContinuityCamera(label: string | undefined): boolean {
+  // A device enumerated before the permission prompt is answered can carry no
+  // label at all, and it arrives as undefined rather than an empty string.
+  const l = (label ?? '').toLowerCase();
+  return l.includes('iphone') || l.includes('ipad') || l.includes('continuity');
+}
+
+/** Desk View is the downward wide-angle feed. Never a face cam. */
+export function isDeskViewCamera(label: string | undefined): boolean {
+  return (label ?? '').toLowerCase().includes('desk view');
+}
+
+/** Lower sorts earlier. Built-in first, Desk View last. */
+function cameraRank(label: string | undefined): number {
+  if (isDeskViewCamera(label)) return 3;
+  if (isContinuityCamera(label)) return 2;
+  const l = (label ?? '').toLowerCase();
+  if (l.includes('built-in') || l.includes('facetime')) return 0;
+  return 1;
+}
+
+/**
+ * Which camera to open when there is no saved choice.
+ *
+ * An iPhone sitting next to the Mac registers as a Continuity Camera and macOS
+ * frequently enumerates it FIRST, so taking cams[0] meant the app could quietly
+ * open the phone instead of the built-in camera: a surprise on the first frame
+ * of a client walkthrough, and it wakes and drains the phone. The phone stays
+ * one click away in the picker, it just never becomes the default on its own.
+ * Ties keep enumeration order, so a single built-in camera is unaffected.
+ */
+export function pickDefaultCamera(cams: MediaDeviceInfoLite[]): string {
+  if (cams.length === 0) return '';
+  let best = cams[0]!;
+  for (const c of cams) {
+    if (cameraRank(c.label) < cameraRank(best.label)) best = c;
+  }
+  return best.deviceId;
+}
+
+/**
+ * Same rule as the camera, for the microphone. An iPhone acting as a
+ * Continuity Camera also publishes its microphone, and it can enumerate
+ * first. Recording a client walkthrough through a phone mic lying face down
+ * on the desk, without having chosen it, is a wasted take. Built-in wins by
+ * default; the phone mic stays selectable.
+ */
+export function pickDefaultMic(mics: MediaDeviceInfoLite[]): string {
+  if (mics.length === 0) return '';
+  let best = mics[0]!;
+  const rank = (label: string | undefined): number => {
+    const l = (label ?? '').toLowerCase();
+    if (l.includes('iphone') || l.includes('ipad') || l.includes('continuity')) return 2;
+    if (l.includes('built-in') || l.includes('macbook')) return 0;
+    return 1;
+  };
+  for (const m of mics) {
+    if (rank(m.label) < rank(best.label)) best = m;
+  }
+  return best.deviceId;
+}
+
 function applyTheme(_theme: Settings['theme']): void {
   // The launcher is a dark glass overlay in both app themes (DESIGN.md overlay
   // family) - its controls always use the dark palette.
@@ -325,8 +391,8 @@ export function Launcher() {
       // never pin getUserMedia to a camera or mic that is gone.
       const savedCam = s.recording.cameraId;
       const savedMic = s.recording.micId;
-      setCameraId(cams.some((c) => c.deviceId === savedCam) ? savedCam : cams[0]?.deviceId ?? '');
-      setMicId(micList.some((m) => m.deviceId === savedMic) ? savedMic : micList[0]?.deviceId ?? '');
+      setCameraId(cams.some((c) => c.deviceId === savedCam) ? savedCam : pickDefaultCamera(cams));
+      setMicId(micList.some((m) => m.deviceId === savedMic) ? savedMic : pickDefaultMic(micList));
     })();
     const offSettings = window.openloomInternal.onSettingsChanged((s) => {
       setSettings(s);
@@ -360,13 +426,21 @@ export function Launcher() {
           const micGone = micIdRef.current && !micList.some((m) => m.deviceId === micIdRef.current);
           const camGone = cameraIdRef.current && !cams.some((c) => c.deviceId === cameraIdRef.current);
           if (micGone) {
-            push('error', `Your microphone disconnected - now using ${micList[0]?.label || 'the default mic'}.`);
+            const micFallbackId = pickDefaultMic(micList);
+            const micFallback = micList.find((m) => m.deviceId === micFallbackId);
+            push('error', `Your microphone disconnected - now using ${micFallback?.label || 'the default mic'}.`);
           }
           if (camGone) {
-            push('error', `Your camera disconnected - now using ${cams[0]?.label || 'the default camera'}.`);
+            // Falls back the same way a fresh launch picks: to the built-in
+            // camera, not merely to whatever macOS happens to list first. This
+            // is the path an iPhone walking out of range takes, so it has to
+            // land somewhere predictable and name what it landed on.
+            const fallbackId = pickDefaultCamera(cams);
+            const fallback = cams.find((c) => c.deviceId === fallbackId);
+            push('error', `Your camera disconnected - now using ${fallback?.label || 'the default camera'}.`);
           }
-          setCameraId((cur) => (cams.some((c) => c.deviceId === cur) ? cur : cams[0]?.deviceId ?? ''));
-          setMicId((cur) => (micList.some((m) => m.deviceId === cur) ? cur : micList[0]?.deviceId ?? ''));
+          setCameraId((cur) => (cams.some((c) => c.deviceId === cur) ? cur : pickDefaultCamera(cams)));
+          setMicId((cur) => (micList.some((m) => m.deviceId === cur) ? cur : pickDefaultMic(micList)));
         } catch {
           /* keep the current lists; the next change event retries */
         }
@@ -475,7 +549,13 @@ export function Launcher() {
           {cameras.length === 0 && <option value="">No camera found</option>}
           {cameras.map((c, i) => (
             <option key={c.deviceId || i} value={c.deviceId}>
-              {c.label || `Camera ${i + 1}`}
+              {c.label
+                ? isDeskViewCamera(c.label)
+                  ? `${c.label} (points at your desk)`
+                  : isContinuityCamera(c.label)
+                    ? `${c.label} (iPhone)`
+                    : c.label
+                : `Camera ${i + 1}`}
             </option>
           ))}
         </select>
