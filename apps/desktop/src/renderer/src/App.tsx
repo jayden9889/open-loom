@@ -14,7 +14,7 @@ import type {
   VideoMeta,
 } from '@shared/types';
 import { Icon } from './components/icons';
-import { ToastProvider, useToasts, cleanIpcError, formatDuration } from './components/ui';
+import { ToastProvider, ConfirmProvider, useToasts, cleanIpcError, formatDuration } from './components/ui';
 import { SetupView } from './views/Setup';
 import { LibraryView } from './views/Library';
 import { WatchView } from './views/Watch';
@@ -454,7 +454,9 @@ function AppInner() {
 export function App() {
   return (
     <ToastProvider>
-      <AppInner />
+      <ConfirmProvider>
+        <AppInner />
+      </ConfirmProvider>
     </ToastProvider>
   );
 }

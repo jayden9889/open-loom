@@ -13,6 +13,7 @@ import {
   formatBytes,
   formatDate,
   formatDuration,
+  useConfirm,
   useToasts,
   type MenuItem,
 } from '../components/ui';
@@ -133,6 +134,7 @@ export function WatchView({
   onOpenYouTubeSettings: () => void;
 }) {
   const { push } = useToasts();
+  const confirm = useConfirm();
   const [meta, setMeta] = useState<VideoMeta | null>(null);
   const [tab, setTab] = useState<Tab>('details');
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -287,12 +289,14 @@ export function WatchView({
   // "Publish to YouTube (unlisted)": upload the final MP4 through the Data API
   // and hand back the watch link. An unaudited API project lands the video as
   // private (privacy === 'private'); the panel then offers the one-click flip.
-  const startYouTubePublish = () => {
+  const startYouTubePublish = async () => {
     // Republishing is a real second upload, not an update: say so before it runs.
     if (meta?.youtubeUrl) {
-      const ok = window.confirm(
-        `"${meta.title}" is already on YouTube. Publishing again uploads a second copy and replaces the saved link - the video already on your channel stays there unless you remove it first. Continue?`
-      );
+      const ok = await confirm({
+        title: 'Publish again?',
+        body: `"${meta.title}" is already on YouTube. Publishing again uploads a second copy and replaces the saved link. The video already on your channel stays there unless you remove it first.`,
+        confirmLabel: 'Publish again',
+      });
       if (!ok) return;
     }
     setTab('details');
@@ -329,11 +333,14 @@ export function WatchView({
   };
 
   // "Remove from YouTube": videos.delete on the channel, then clear the link.
-  const removeFromYouTube = () => {
+  const removeFromYouTube = async () => {
     if (!meta?.youtubeUrl) return;
-    const ok = window.confirm(
-      `Remove "${meta.title}" from YouTube? Anyone with the link will no longer be able to watch it.`
-    );
+    const ok = await confirm({
+      title: 'Remove from YouTube',
+      body: `"${meta.title}" will be removed from YouTube. Anyone with the link will no longer be able to watch it.`,
+      confirmLabel: 'Remove',
+      danger: true,
+    });
     if (!ok) return;
     setYoutubeError(null);
     setYoutubeRemoving(true);
@@ -1213,32 +1220,48 @@ export function WatchView({
               <button
                 type="button"
                 className="btn-danger-quiet"
-                onClick={() => {
-                  // The Library's delete confirms; this one fired on a single
-                  // click. Same destructive action, so it asks the same way.
-                  const shared = meta?.share ? ' Its shared link will stop working.' : '';
-                  if (!window.confirm(`Delete "${meta?.title ?? 'this recording'}"?${shared}`)) return;
-                  void window.openloom.deleteVideo(id).then(onDeleted, (err) => {
-                    const msg = cleanIpcError(err);
-                    // The main process refuses the delete when the shared copy
-                    // cannot be removed (host unreachable), so the link never
-                    // silently outlives the UI. But "the app will not let me
-                    // delete my own recording" needs an escape hatch: force
-                    // tombstones the orphaned link and retries on every launch.
-                    if (meta?.share && /shared copy could not be removed/i.test(msg)) {
-                      const anyway = window.confirm(
-                        'The share host could not be reached, so the shared copy is still up.\n\nDelete the local recording anyway? The link stays live until Open Loom can reach the host, and it will keep trying on every launch.'
-                      );
-                      if (anyway) {
-                        void window.openloom
-                          .deleteVideo(id, { force: true })
-                          .then(onDeleted, (err2) => push('error', cleanIpcError(err2)));
+                onClick={() =>
+                  void (async () => {
+                    // The Library's delete confirms; this one fired on a single
+                    // click. Same destructive action, so it asks the same way.
+                    const shared = meta?.share ? ' Its shared link will stop working.' : '';
+                    const ok = await confirm({
+                      title: 'Delete video',
+                      body: `"${meta?.title ?? 'this recording'}" will be deleted.${shared}`,
+                      confirmLabel: 'Delete',
+                      danger: true,
+                    });
+                    if (!ok) return;
+                    try {
+                      await window.openloom.deleteVideo(id);
+                      onDeleted();
+                    } catch (err) {
+                      const msg = cleanIpcError(err);
+                      // The main process refuses the delete when the shared copy
+                      // cannot be removed (host unreachable), so the link never
+                      // silently outlives the UI. But "the app will not let me
+                      // delete my own recording" needs an escape hatch: force
+                      // tombstones the orphaned link and retries on every launch.
+                      if (meta?.share && /shared copy could not be removed/i.test(msg)) {
+                        const anyway = await confirm({
+                          title: 'Share host unreachable',
+                          body: 'The shared copy is still up because the host could not be reached. Delete the local recording anyway? The link stays live until Open Loom can reach the host, and it will keep trying on every launch.',
+                          confirmLabel: 'Delete anyway',
+                          danger: true,
+                        });
+                        if (!anyway) return;
+                        try {
+                          await window.openloom.deleteVideo(id, { force: true });
+                          onDeleted();
+                        } catch (err2) {
+                          push('error', cleanIpcError(err2));
+                        }
+                        return;
                       }
-                      return;
+                      push('error', msg);
                     }
-                    push('error', msg);
-                  });
-                }}
+                  })()
+                }
               >
                 <Icon.Trash width={15} height={15} />
                 Delete video

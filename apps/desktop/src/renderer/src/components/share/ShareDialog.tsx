@@ -146,7 +146,7 @@ export function ShareDialog({ video, onClose, onChange, onOpenSharingSettings, o
                 </p>
                 {onOpenSharingSettings && (
                   <div>
-                    <button type="button" className="btn-secondary" onClick={onOpenSharingSettings}>
+                    <button type="button" className="btn-primary" onClick={onOpenSharingSettings}>
                       Open sharing settings
                     </button>
                   </div>

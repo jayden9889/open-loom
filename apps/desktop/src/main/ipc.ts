@@ -227,6 +227,15 @@ export function registerIpc(): void {
   });
   handle('ol:searchVideos', (_e, q: string) => library().search(q));
   handle('ol:setCustomThumbnail', async (_e, id: string, source) => {
+    // The id is validated in the store, but the source path is a free-form
+    // absolute path off the renderer. Without this the handler is a read
+    // primitive over the whole disk: any image is copied into thumb.jpg, and
+    // the syncShareThumbnail call below then pushes it to the share host. Only
+    // a path the user actually chose in the file dialog is accepted, which is
+    // exactly what the one caller (ThumbnailPicker) already does.
+    if (source?.path && !dialogPicked.has(path.resolve(source.path))) {
+      throw new Error('Choose that image with the Browse button so it can be verified.');
+    }
     await setCustomThumbnail(id, source);
     // The hosted page shows the old auto-grabbed frame until the new one is
     // pushed; best-effort, no-op for unshared videos.

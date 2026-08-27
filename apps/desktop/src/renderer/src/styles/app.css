@@ -1083,26 +1083,6 @@ textarea {
   height: 15px;
 }
 
-/* ---------------------------------------------------------------- recorder panel */
-
-.recorder-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  padding: 0 18px 18px;
-  overflow-y: auto;
-}
-
-.recorder-panel > .segmented {
-  align-self: stretch;
-  display: flex;
-}
-
-.recorder-panel > .segmented .segment {
-  flex: 1;
-  justify-content: center;
-}
-
 .source-picker-head {
   display: flex;
   align-items: center;
@@ -1124,6 +1104,20 @@ textarea {
   color: var(--ol-text-secondary);
   padding: 18px;
   text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.source-loading::before {
+  content: '';
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-top-color: var(--ol-accent);
+  animation: spin 0.9s linear infinite;
 }
 
 /* Shown in place of the source grid when macOS has not granted Screen
@@ -1206,12 +1200,6 @@ textarea {
   white-space: nowrap;
 }
 
-.recorder-devices {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
 .mic-meter {
   height: 5px;
   border-radius: var(--ol-radius-pill);
@@ -1229,74 +1217,6 @@ textarea {
   transform: scaleX(0);
   transform-origin: left;
   will-change: transform;
-}
-
-/* Simple by default: just the Camera/Microphone toggles. */
-.quick-toggles {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-/* Everything else is tucked behind a native details/summary. */
-.advanced {
-  border-top: 1px solid var(--ol-border);
-  padding-top: 10px;
-}
-
-.advanced > summary {
-  cursor: pointer;
-  list-style: none;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 0;
-  color: var(--ol-text-secondary);
-  font-size: var(--ol-text-sm);
-  font-weight: 600;
-  user-select: none;
-}
-
-.advanced > summary::-webkit-details-marker {
-  display: none;
-}
-
-.advanced > summary::before {
-  content: '';
-  width: 6px;
-  height: 6px;
-  border-right: 2px solid currentColor;
-  border-bottom: 2px solid currentColor;
-  transform: rotate(-45deg);
-  transition: transform var(--ol-dur-fast) var(--ol-ease);
-}
-
-.advanced[open] > summary::before {
-  transform: rotate(45deg);
-}
-
-.advanced > summary:hover {
-  color: var(--ol-text);
-}
-
-.advanced-body {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  padding-top: 12px;
-}
-
-.mic-meter-error {
-  font-size: var(--ol-text-sm);
-  color: var(--ol-danger);
-}
-
-.recorder-foot {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  border-top: 1px solid var(--ol-border);
-  padding-top: 14px;
 }
 
 /* ---------------------------------------------------------------- setup */
@@ -1405,11 +1325,6 @@ textarea {
 .pill-todo {
   background: var(--ol-accent-soft);
   color: var(--ol-accent);
-}
-
-.pill-pending {
-  background: var(--ol-hover);
-  color: var(--ol-text-secondary);
 }
 
 /* Install progress: a quiet ring plus plain words by default; the raw command
@@ -1540,6 +1455,9 @@ textarea {
 .watch-player-col {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: safe center;
 }
 
 .player {
@@ -1932,6 +1850,11 @@ textarea {
   color: var(--ol-text-secondary);
 }
 
+.side-panel > .side-empty-state:only-child {
+  margin-top: auto;
+  margin-bottom: auto;
+}
+
 .side-empty-state h4 {
   margin: 4px 0 0;
   color: var(--ol-text);
@@ -2004,87 +1927,6 @@ textarea {
 
 .cue-text {
   line-height: 1.45;
-}
-
-.activity {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.stat-row {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-}
-
-.stat {
-  background: var(--ol-surface-2);
-  border: 1px solid var(--ol-border);
-  border-radius: var(--ol-radius-control);
-  padding: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  align-items: center;
-}
-
-.stat-value {
-  font-size: var(--ol-text-lg);
-  font-weight: 700;
-}
-
-.stat-label {
-  font-size: var(--ol-text-xs);
-  color: var(--ol-text-secondary);
-}
-
-.reaction-row {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.reaction-chip {
-  background: var(--ol-hover);
-  border-radius: var(--ol-radius-pill);
-  padding: 3px 9px;
-  font-size: var(--ol-text-sm);
-}
-
-.comment-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.comment {
-  border: 1px solid var(--ol-border);
-  border-radius: var(--ol-radius-control);
-  padding: 8px 10px;
-}
-
-.comment-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 3px;
-}
-
-.comment p {
-  margin: 0;
-  line-height: 1.45;
-}
-
-.comment-time {
-  border: none;
-  background: var(--ol-accent-soft);
-  color: var(--ol-accent);
-  border-radius: var(--ol-radius-pill);
-  padding: 1px 8px;
-  font-size: var(--ol-text-xs);
-  font-weight: 600;
-  cursor: pointer;
 }
 
 /* ---------------------------------------------------------------- settings */

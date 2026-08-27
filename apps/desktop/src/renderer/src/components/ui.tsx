@@ -223,6 +223,85 @@ export function Modal({
 }
 
 // ---------------------------------------------------------------------------
+// Confirm dialog
+// ---------------------------------------------------------------------------
+
+export interface ConfirmOptions {
+  title: string;
+  body: ReactNode;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  /** Destructive actions get the red button rather than the accent one. */
+  danger?: boolean;
+}
+
+type ConfirmFn = (opts: ConfirmOptions) => Promise<boolean>;
+
+/**
+ * Asking before something destructive is a product surface, not an OS one: a
+ * native window.confirm paints a grey system slab over an Apple-sleek app and
+ * blocks the whole renderer while it sits there. This is the same question in
+ * the app's own Modal.
+ *
+ * The default falls back to the native dialog so a call site inside an overlay
+ * window (which never mounts this provider) still asks rather than silently
+ * proceeding.
+ */
+const ConfirmContext = createContext<ConfirmFn>(async (opts) =>
+  window.confirm(typeof opts.body === 'string' ? opts.body : opts.title)
+);
+
+export function useConfirm(): ConfirmFn {
+  return useContext(ConfirmContext);
+}
+
+export function ConfirmProvider({ children }: { children: ReactNode }) {
+  const [pending, setPending] = useState<{
+    opts: ConfirmOptions;
+    resolve: (value: boolean) => void;
+  } | null>(null);
+
+  const confirm = useCallback<ConfirmFn>(
+    (opts) => new Promise<boolean>((resolve) => setPending({ opts, resolve })),
+    []
+  );
+
+  // The promise MUST settle on every exit path (button, Escape, scrim click),
+  // or the awaiting call site hangs forever holding its own state.
+  const settle = (value: boolean): void => {
+    if (!pending) return;
+    pending.resolve(value);
+    setPending(null);
+  };
+
+  return (
+    <ConfirmContext.Provider value={confirm}>
+      {children}
+      {pending && (
+        <Modal title={pending.opts.title} onClose={() => settle(false)}>
+          <div className="modal-form">
+            <p className="modal-text">{pending.opts.body}</p>
+            <div className="modal-actions">
+              <button type="button" className="btn-secondary" onClick={() => settle(false)}>
+                {pending.opts.cancelLabel ?? 'Cancel'}
+              </button>
+              <button
+                type="button"
+                className={pending.opts.danger ? 'btn-danger' : 'btn-primary'}
+                onClick={() => settle(true)}
+                autoFocus
+              >
+                {pending.opts.confirmLabel ?? 'Continue'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </ConfirmContext.Provider>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Segmented control + toggle
 // ---------------------------------------------------------------------------
 
