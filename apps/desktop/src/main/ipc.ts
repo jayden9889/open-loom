@@ -19,7 +19,7 @@ import {
 import { cameraEffectsStatus, openCameraEffectsPanel } from './camera-effects';
 import { getSettingsMasked, setSettings, getSettings } from './settings';
 import { fetchFfmpeg, cancelJob } from './ffmpeg';
-import { validateShortcuts } from './shortcuts';
+import { getShortcutFailures, validateShortcuts } from './shortcuts';
 import { broadcast, getMainWindow, showLauncher } from './windows';
 import {
   trimVideo,
@@ -309,6 +309,14 @@ export function registerIpc(): void {
     broadcast('ol:settings-changed', masked);
     return masked;
   });
+  /**
+   * Which accelerators the OS refused on the last apply. Saving a shortcut
+   * succeeds even when the key is already owned by another app, so Settings
+   * has to read this back or it congratulates the user on a dead hotkey.
+   * setSettings runs the re-registration synchronously through its listeners,
+   * so calling this straight after a save always sees the fresh result.
+   */
+  handle('ol:shortcutFailures', () => getShortcutFailures());
   handle('ol:pickDirectory', async () => {
     const win = getMainWindow();
     const result = win

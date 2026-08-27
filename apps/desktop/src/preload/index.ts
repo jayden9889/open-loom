@@ -120,6 +120,7 @@ const api: OpenLoomAPI = {
   setSettings: (patch: Partial<Settings>) => ipcRenderer.invoke('ol:setSettings', patch),
   pickDirectory: () => ipcRenderer.invoke('ol:pickDirectory'),
   pickFile: (filter: string) => ipcRenderer.invoke('ol:pickFile', filter),
+  shortcutFailures: () => ipcRenderer.invoke('ol:shortcutFailures'),
   getPermissions: () => ipcRenderer.invoke('ol:getPermissions'),
   cameraEffects: () => ipcRenderer.invoke('ol:cameraEffects'),
   openCameraEffects: () => ipcRenderer.send('ol:openCameraEffects'),

@@ -191,16 +191,28 @@ export function WatchView({
 
   // Reflect whether a YouTube account is connected whenever the panel is shown
   // (and on window focus, so returning from the Settings consent updates it).
+  // Same cancellation guard as the meta load below. This status is account wide
+  // rather than per video, so a late answer cannot show the wrong video's data,
+  // but the request can still be running when the panel closes or the view is
+  // torn down. Without the flag that answer writes youtubeConnected into a
+  // component the user has already left, and a reopened panel then shows a
+  // stale connected state before the refetch has landed.
   useEffect(() => {
     if (!youtubeOpen || meta?.youtubeUrl) return;
+    let cancelled = false;
     const refreshStatus = () =>
       void window.openloom.youtubeStatus().then(
-        (s) => setYoutubeConnected(s.connected),
+        (s) => {
+          if (!cancelled) setYoutubeConnected(s.connected);
+        },
         () => undefined
       );
     refreshStatus();
     window.addEventListener('focus', refreshStatus);
-    return () => window.removeEventListener('focus', refreshStatus);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('focus', refreshStatus);
+    };
   }, [youtubeOpen, meta?.youtubeUrl]);
 
   const videoUrl = `${window.openloom.fileUrl(id, 'video.mp4')}?v=${mediaRefresh}`;
@@ -216,11 +228,27 @@ export function WatchView({
   const transcriptionConfigured = settings.transcription.engine !== 'off';
   const aiConfigured = settings.ai.provider !== 'off';
 
+  // Loading meta is asynchronous, so a fast switch from video A to video B
+  // leaves A's request still running. With no guard A resolves last and calls
+  // setMeta, and the view then holds A's title, description and AI fields while
+  // `id` already points at B. The next save, a description edit or an AI field,
+  // writes A's content onto B. The flag is captured per effect run and cleared
+  // in cleanup, so only the newest request is ever allowed to touch state.
+  // The failure path is guarded for the same reason: a superseded request that
+  // rejects would otherwise toast an error about a video the user has left.
   useEffect(() => {
+    let cancelled = false;
     void window.openloom
       .getVideo(id)
-      .then(setMeta)
-      .catch((err) => push('error', cleanIpcError(err)));
+      .then((m) => {
+        if (!cancelled) setMeta(m);
+      })
+      .catch((err) => {
+        if (!cancelled) push('error', cleanIpcError(err));
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [id, push, refresh]);
 
   // Live progress for transcription / AI / edit jobs on this video; reload

@@ -407,7 +407,20 @@ function AppInner() {
           />
         )}
         {view.name === 'watch' && (
+          // Keyed on the video id so switching videos remounts rather than
+          // reusing the mounted view. React keeps state across a plain prop
+          // change, which left the previous video's meta, title and description
+          // drafts, tab, captions and playhead sitting in state while `id`
+          // already pointed at the new video, and a save then wrote the old
+          // video's content onto the new one. Nothing worth keeping is thrown
+          // away here: every one of those pieces of state belongs to the video
+          // being left, and the player preferences of speed, volume and mute
+          // are read back from local storage on mount. The cancellation guard
+          // inside the view is still the real fix. This also covers the setMeta
+          // calls that sit in click handlers rather than effects, since an
+          // unmounted component ignores them.
           <WatchView
+            key={view.id}
             id={view.id}
             freshRecording={view.fresh ?? false}
             folders={folders}

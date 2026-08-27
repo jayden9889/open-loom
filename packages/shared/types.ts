@@ -257,6 +257,19 @@ export interface ShortcutSettings {
   draw: string;
   /** Show/hide the talking-notes overlay mid-take (it can sit over content). */
   notes: string;
+  /**
+   * Re-say the last ten seconds. The launcher advertises this in its footer
+   * hint and the HUD carries the button, but during a full screen recording
+   * the HUD is behind whatever is being shown, so without a global key the
+   * feature is only reachable by hunting for a window mid take.
+   */
+  redo: string;
+  /**
+   * Mute or unmute the microphone mid-take. Same reachability problem as the
+   * redo key: the HUD button is useless the moment the recording covers it,
+   * and an unmuted mic during an interruption ruins the take.
+   */
+  mic: string;
 }
 
 /**
@@ -274,6 +287,15 @@ export const DEFAULT_SHORTCUTS: ShortcutSettings = {
   restart: 'CommandOrControl+Shift+R',
   draw: 'Control+1',
   notes: 'Control+2',
+  // B for "back ten seconds" and M for "mute". Both join the Alt+Shift family
+  // the other mid-take keys already use (pause, cancel), which keeps them
+  // clear of every accelerator above and clear of macOS itself: Option plus
+  // Shift plus a letter is not a system shortcut, whereas Control plus a
+  // digit is Mission Control's desktop switcher on a machine with more than
+  // one desktop. Existing installs pick these up through the defaults merge
+  // in getSettings, so nobody has to reset their shortcuts to get them.
+  redo: 'Alt+Shift+B',
+  mic: 'Alt+Shift+M',
 };
 
 /** Pre-2026-07-23 draw default; stored settings carrying it migrate to Control+1. */
@@ -809,6 +831,13 @@ export interface OpenLoomAPI {
   setSettings(patch: Partial<Settings>): Promise<Settings>;
   pickDirectory(): Promise<string | null>;
   pickFile(filter: string): Promise<string | null>;
+  /**
+   * Accelerators the OS refused at the last apply, keyed by shortcut name.
+   * Saving a shortcut always succeeds, so without reading this back Settings
+   * shows a green toast for a key another app already owns and the user only
+   * finds out when they press it to stop a recording.
+   */
+  shortcutFailures(): Promise<Partial<ShortcutSettings>>;
   getPermissions(): Promise<PermissionsSnapshot>;
   requestPermission(kind: string): Promise<void>;
   /**

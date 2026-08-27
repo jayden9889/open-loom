@@ -261,9 +261,27 @@ export function SettingsView({
   const s = settings;
   const save = (patch: Partial<Settings>) => void onUpdate(patch);
 
+  /**
+   * Saving a shortcut always succeeds, but registering it with the OS can
+   * fail: another app may already own the combination. That refusal used to
+   * be recorded in the main process and thrown away, so a hotkey that does
+   * nothing still got a green "Shortcut updated." and the user only found out
+   * when they pressed it to stop a full screen recording, which is the one
+   * moment the HUD is not reachable. Read the refusals back before deciding
+   * which toast to show.
+   */
   const saveShortcut = (key: keyof ShortcutSettings, accel: string) => {
-    void onUpdate({ shortcuts: { ...s.shortcuts, [key]: accel } }).then((next) => {
-      if (next) push('success', 'Shortcut updated.');
+    void onUpdate({ shortcuts: { ...s.shortcuts, [key]: accel } }).then(async (next) => {
+      if (!next) return;
+      // If the refusal list itself cannot be read there is nothing specific to
+      // warn about, so fall back to an empty map and report the save rather
+      // than leaving the user with no answer at all.
+      const failures: Partial<ShortcutSettings> = await window.openloom.shortcutFailures().catch(() => ({}));
+      if (failures[key]) {
+        push('error', `Saved, but ${accel} is already in use by another app so it will not work. Try another combination.`);
+        return;
+      }
+      push('success', 'Shortcut updated.');
     });
   };
 
@@ -658,6 +676,12 @@ export function SettingsView({
               </Row>
               <Row label="Show / hide talking notes">
                 <ShortcutField value={s.shortcuts.notes} onSave={(a) => saveShortcut('notes', a)} ariaLabel="Talking notes shortcut" />
+              </Row>
+              <Row label="Re-say the last 10 seconds">
+                <ShortcutField value={s.shortcuts.redo} onSave={(a) => saveShortcut('redo', a)} ariaLabel="Re-say the last 10 seconds shortcut" />
+              </Row>
+              <Row label="Mute / unmute microphone">
+                <ShortcutField value={s.shortcuts.mic} onSave={(a) => saveShortcut('mic', a)} ariaLabel="Microphone mute shortcut" />
               </Row>
             </section>
           )}

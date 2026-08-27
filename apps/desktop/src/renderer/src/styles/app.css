@@ -167,9 +167,17 @@ textarea {
   background: rgba(255, 69, 58, 0.1);
 }
 
+/* Every button variant has to read as disabled, otherwise the control lies
+   about what a click will do. .btn-danger-quiet was missing from this list, so
+   the Editor's "remove the selected section" button (Editor.tsx) kept its full
+   strength danger red text and its pointer cursor while it was disabled,
+   which invites a click that silently does nothing. The hover rules for each
+   variant already guard themselves with :not(:disabled), so the quiet danger
+   variant only ever needed adding here to fall in line with the others. */
 .btn-primary:disabled,
 .btn-secondary:disabled,
-.btn-danger:disabled {
+.btn-danger:disabled,
+.btn-danger-quiet:disabled {
   opacity: 0.45;
   cursor: default;
 }
@@ -1188,16 +1196,38 @@ textarea {
   background: var(--ol-surface-2);
 }
 
+/* text-overflow only ever applies to a block container, so declaring it on a
+   flex container does nothing at all and a long window title was being chopped
+   through the middle of a character instead of ending in an ellipsis. The
+   window name is a bare text node between an icon and an optional sub label
+   (Launcher.tsx), and a bare text node inside a flex container becomes an
+   anonymous flex item that no selector can reach, so the truncation cannot be
+   pushed down to an inner element here. The fix is to drop the flex context
+   and lay the row out as ordinary inline flow, which gives the ellipsis the
+   block container it needs. text-align has to be set explicitly because the
+   card is a button and the user agent centres button text; the old flex box
+   packed its items to the start, which is what made it look left aligned. */
 .source-name {
-  display: flex;
-  align-items: center;
-  gap: 5px;
+  display: block;
+  text-align: left;
   font-size: var(--ol-text-xs);
   font-weight: 500;
   padding: 6px 8px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Stands in for the gap the flex box used to provide. The icon leads the row,
+   so it is never the thing that gets truncated, and vertical-align keeps it
+   sitting on the text centre the way align-items: center did. */
+.source-name > svg {
+  vertical-align: middle;
+  margin-right: 5px;
+}
+
+.source-name > span {
+  margin-left: 5px;
 }
 
 /* Shown in place of the meter when the mic cannot be opened. Deleted by a
@@ -1413,16 +1443,26 @@ textarea {
   gap: 10px;
 }
 
+/* Same defect as .source-name: text-overflow does nothing on an inline-flex
+   container, so a long recording title was hard clipped mid character rather
+   than ending in an ellipsis. The title is a bare text node followed by the
+   pencil (Watch.tsx), so there is no inner element to move the truncation to
+   and the row has to become ordinary inline flow instead. The pencil is lifted
+   out of that flow and pinned to the right, with padding-right reserving its
+   old 8px gap plus its 13px width, because a trailing inline icon would be the
+   first thing the ellipsis ate and the rename affordance would vanish on
+   exactly the long titles that need renaming most. text-align is explicit
+   because this is a button and the user agent centres button text. */
 .watch-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
+  display: block;
+  position: relative;
+  text-align: left;
   border: none;
   background: transparent;
   font-size: var(--ol-text-lg);
   font-weight: 700;
   cursor: text;
-  padding: 4px 6px;
+  padding: 4px 27px 4px 6px;
   border-radius: var(--ol-radius-control);
   min-width: 0;
   overflow: hidden;
@@ -1432,7 +1472,10 @@ textarea {
 
 .watch-title svg {
   color: var(--ol-text-tertiary);
-  flex: none;
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 .watch-title:hover {
@@ -2644,25 +2687,30 @@ textarea {
 
 /* ---------------------------------------------------------------- keyboard focus */
 
-/* Every interactive component ships a focus state (DESIGN.md) - these had
+/* Every interactive component ships a focus state (DESIGN.md). These had
    hover but nothing for the keyboard, which matters most on the menu's
-   Delete row and the source picker. */
+   Delete row and the source picker.
+
+   .source-card is on this list rather than carrying a rule of its own. It used
+   to answer focus by recolouring its 2px border to the accent, which is the
+   exact treatment .source-card.selected uses, so tabbing through the window
+   picker looked like it was selecting every card it passed over and the user
+   could not tell what was actually going to be recorded. Focus now draws the
+   same ring every other control in the app draws, outside the border box, and
+   the accent border goes back to meaning selected and nothing else. Selection
+   stays the stronger read of the two: it repaints the card's own 2px edge and
+   it persists, where the ring is 1.5px, sits outside the card, and vanishes
+   the moment focus moves on. */
 .tab:focus-visible,
 .ctrl-btn:focus-visible,
 .menu-item:focus-visible,
 .settings-nav-item:focus-visible,
 .video-title:focus-visible,
 .video-trim:focus-visible,
-.watch-title:focus-visible {
-  outline: none;
-  box-shadow: var(--ol-focus-ring);
-}
-
-/* The source card already carries a 2px border - recolour it rather than
-   stacking a ring on top. */
+.watch-title:focus-visible,
 .source-card:focus-visible {
   outline: none;
-  border-color: var(--ol-accent);
+  box-shadow: var(--ol-focus-ring);
 }
 
 /* ---------------------------------------------------------------- reduced motion */

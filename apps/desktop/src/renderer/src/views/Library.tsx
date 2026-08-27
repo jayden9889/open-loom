@@ -12,6 +12,7 @@ import {
   cleanIpcError,
   formatDate,
   formatDuration,
+  useConfirm,
   useToasts,
   type MenuItem,
 } from '../components/ui';
@@ -172,6 +173,7 @@ export function LibraryView({
   onOpenSharingSettings: () => void;
 }) {
   const { push } = useToasts();
+  const confirm = useConfirm();
   const [query, setQuery] = useState('');
   const [searchIds, setSearchIds] = useState<Set<string> | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; video: VideoMeta } | null>(null);
@@ -354,11 +356,32 @@ export function LibraryView({
                 aria-label="Delete folder"
                 title="Delete folder (videos move to Library)"
                 onClick={() => {
-                  void window.openloom
-                    .deleteFolder(folder.id)
-                    .then(onChanged)
-                    .then(() => push('success', 'Folder deleted. Its videos are back in the Library.'))
-                    .catch((err) => push('error', cleanIpcError(err)));
+                  // Deleting a folder used to happen on this one click with
+                  // nothing asked, and it sits a few pixels from Rename, so a
+                  // slip of the mouse wiped a folder the user had just built.
+                  // Every other destructive action here asks first, including
+                  // the video delete lower down this file, so this one asks in
+                  // the same dialog rather than being the odd one out.
+                  //
+                  // The copy names what survives on purpose. deleteFolder in
+                  // library-core only drops the folder row and then clears
+                  // folderId on each video that was in it, so the recordings
+                  // themselves are untouched and reappear in the Library. A
+                  // confirm that let the user think their videos were about to
+                  // go would scare them off a harmless action.
+                  void confirm({
+                    title: 'Delete folder',
+                    body: `“${folder.name}” will be deleted. The videos inside are kept and move back to the Library.`,
+                    confirmLabel: 'Delete',
+                    danger: true,
+                  }).then((ok) => {
+                    if (!ok) return;
+                    return window.openloom
+                      .deleteFolder(folder.id)
+                      .then(onChanged)
+                      .then(() => push('success', 'Folder deleted. Its videos are back in the Library.'))
+                      .catch((err) => push('error', cleanIpcError(err)));
+                  });
                 }}
               >
                 <Icon.Trash width={15} height={15} />

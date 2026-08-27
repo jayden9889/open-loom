@@ -2,7 +2,23 @@
    app.css controls (segmented, toggle, source grid, mic meter); this file
    only shapes them into the slim left-edge column. */
 
+/* The panel is dark glass in both app themes (DESIGN.md overlay family), so
+   its text cannot come from --ol-text, --ol-text-secondary or
+   --ol-text-tertiary: those flip with the theme, and the light values are
+   near black or mid grey, which all but disappear against the dark base. The
+   dark theme lock in Launcher.tsx only lands after an await on getSettings
+   over IPC, so until that resolves the document carries no data-theme at all
+   and the light :root palette is what actually paints. That is a real flash of
+   unreadable text on every open, not a hypothetical. Pinning the panel's
+   colours to the dark palette values from design-tokens.css removes the
+   dependency on the lock and on when it fires. Keep these in step with the
+   [data-theme='dark'] block in packages/shared/design-tokens.css. Tokens that
+   do not flip (--ol-accent, --ol-success, radii, durations, type sizes) are
+   still used directly below and should stay that way. */
 body.launcher-body {
+  --launcher-text: #f5f5f7;
+  --launcher-text-secondary: #98989d;
+  --launcher-text-tertiary: #636366;
   background: transparent;
   overflow: hidden;
   user-select: none;
@@ -39,7 +55,7 @@ body.launcher-body {
 .launcher-title {
   font-size: 12px;
   font-weight: 600;
-  color: var(--ol-text-tertiary);
+  color: var(--launcher-text-tertiary);
   letter-spacing: 0.02em;
 }
 
@@ -103,7 +119,7 @@ body.launcher-body {
   text-align: center;
   padding: 12px;
   font-size: 12px;
-  color: var(--ol-text-secondary);
+  color: var(--launcher-text-secondary);
   /* Overlay surface family: glass-native fill, not the in-app surface token,
      so the panel cannot sprout a white card if the dark theme lock ever goes. */
   background: rgba(255, 255, 255, 0.06);
@@ -191,7 +207,7 @@ body.launcher-body {
 
 .source-sub {
   font-weight: 400;
-  color: var(--ol-text-tertiary);
+  color: var(--launcher-text-tertiary);
 }
 
 .source-group-label {
@@ -202,7 +218,7 @@ body.launcher-body {
   flex: 1;
   margin: 0;
   font-size: 12px;
-  color: var(--ol-text-tertiary);
+  color: var(--launcher-text-tertiary);
 }
 
 .launcher-foot {
@@ -234,7 +250,7 @@ body.launcher-body {
   margin: 0;
   text-align: center;
   font-size: 11px;
-  color: var(--ol-text-tertiary);
+  color: var(--launcher-text-tertiary);
 }
 
 /* Talking notes: typed here, shown in the capture-excluded overlay during the
@@ -254,7 +270,7 @@ body.launcher-body {
   border-radius: 9px;
   border: 1px solid rgba(255, 255, 255, 0.18);
   background: rgba(255, 255, 255, 0.06);
-  color: var(--ol-text, #f5f5f7);
+  color: var(--launcher-text);
   font: inherit;
   font-size: 12px;
   line-height: 1.4;

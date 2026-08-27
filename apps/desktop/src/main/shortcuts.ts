@@ -11,12 +11,14 @@ import {
   isPaused,
   isRecordingActive,
   pauseRecording,
+  redoLastTen,
   requestCancelRecording,
   requestRestartRecording,
   resumeRecording,
   startRecording,
   stopRecording,
   toggleDraw,
+  toggleMic,
   toggleNotes,
   currentState,
 } from './recorder-ipc';
@@ -73,6 +75,13 @@ const ACTIONS: Record<keyof ShortcutSettings, () => void> = {
   restart: () => requestRestartRecording(),
   draw: () => toggleDraw(!currentState().drawOn),
   notes: () => toggleNotes(),
+  // Both fire exactly what the matching HUD button fires. The HUD is the only
+  // way to reach either of these today, and a full screen recording covers
+  // the HUD, so the button was unreachable at the one moment it is wanted.
+  // Each underlying function no-ops when there is no live take, so a stray
+  // press outside a recording costs nothing.
+  redo: () => redoLastTen(),
+  mic: () => toggleMic(!currentState().micOn),
 };
 
 /** Row labels for validation errors - internal keys like "startStop" must never reach a toast. */
@@ -83,6 +92,8 @@ const SHORTCUT_LABELS: Record<keyof ShortcutSettings, string> = {
   restart: 'Restart recording',
   draw: 'Toggle drawing',
   notes: 'Show / hide talking notes',
+  redo: 'Re-say the last 10 seconds',
+  mic: 'Mute / unmute microphone',
 };
 
 function shortcutLabel(name: string): string {
