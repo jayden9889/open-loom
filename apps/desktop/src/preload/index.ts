@@ -155,6 +155,7 @@ const internal: OpenLoomInternal = {
   getRecordingState: () => ipcRenderer.invoke('ol:getRecordingState'),
   getSettings: () => ipcRenderer.invoke('ol:getSettings'),
   setBubbleMirror: (mirror: boolean) => ipcRenderer.send('ol:setBubbleMirror', mirror),
+  cameraLost: () => ipcRenderer.send('ol:camera-lost'),
   onSettingsChanged: subscribe<Settings>('ol:settings-changed'),
   onNavigate: subscribe<{ view: string; mode?: string }>('ol:navigate'),
   onToast: subscribe<{ kind: 'info' | 'success' | 'error'; text: string }>('ol:toast'),

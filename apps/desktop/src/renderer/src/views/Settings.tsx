@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { AppInfo, CameraEffectsStatus, PermissionsSnapshot, Settings, ShortcutSettings } from '@shared/types';
 import { Icon } from '../components/icons';
 import { prettyAccel } from '../components/accel';
+import { accelFromKeyEvent } from '../shortcut-accel';
 import { attachHealthyCameraStream, type HealthyCameraSession } from '../media';
 import { Modal, Segmented, Toggle, cleanIpcError, useToasts } from '../components/ui';
 
@@ -98,15 +99,19 @@ function ShortcutField({
       setCapturing(false);
       return;
     }
-    const mods: string[] = [];
-    if (e.metaKey || e.ctrlKey) mods.push('CommandOrControl');
-    if (e.altKey) mods.push('Alt');
-    if (e.shiftKey) mods.push('Shift');
-    const key = e.key.length === 1 ? e.key.toUpperCase() : e.key;
-    if (['Shift', 'Alt', 'Control', 'Meta'].includes(e.key)) return; // wait for a real key
-    if (mods.length === 0) return; // require at least one modifier for a global shortcut
+    // The accelerator is built by the shared module rather than read off
+    // e.key here, because e.key is the composed character: on macOS Option
+    // composes, so Option+Shift+P arrives as 'Π' and saving 'Alt+Shift+Π'
+    // leaves the user with a green toast and a shortcut Electron never
+    // registered. The module also keeps Command and Control apart, without
+    // which the shipped draw default Control+1 could not be typed back in.
+    const accel = accelFromKeyEvent(e, navigator.platform.toLowerCase().includes('mac'));
+    // Null means the press is not a usable shortcut yet, a modifier held on
+    // its own or a key Electron cannot register, so keep capturing instead
+    // of closing the field on a binding that would never fire.
+    if (!accel) return;
     setCapturing(false);
-    onSave([...mods, key].join('+'));
+    onSave(accel);
   };
 
   return (

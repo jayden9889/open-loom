@@ -861,6 +861,8 @@ export interface OpenLoomInternal {
   getRecordingState(): Promise<RecordingState>;
   getSettings(): Promise<Settings>;
   setBubbleMirror(mirror: boolean): void;
+  /** The camera died mid take; main warns the user and keeps the recording running. */
+  cameraLost(): void;
   onSettingsChanged(cb: (s: Settings) => void): () => void;
   onNavigate(cb: (nav: { view: string; mode?: string; id?: string }) => void): () => void;
   /** Toasts pushed from the main process (e.g. the share-on-stop flow). */

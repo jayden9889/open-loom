@@ -14,6 +14,7 @@ import { library } from '../library';
 import { emitJobProgress } from '../ffmpeg';
 import { broadcast, createMainWindow } from '../windows';
 import { log } from '../logger';
+import { takeVideoLock, releaseVideoLock } from '../video-lock';
 import {
   createShareProvider,
   type ProviderConfigs,
@@ -65,6 +66,14 @@ export function isUploading(videoId: string): boolean {
 async function runUploadWithRetry(provider: ShareProvider, result: ShareResult, meta: VideoMeta): Promise<void> {
   const filesDir = path.join(library().root, meta.id);
   const startedAt = new Date().toISOString();
+  // An edit rewrites video.mp4 in place, so a trim landing while these bytes are
+  // being streamed hands the client half the old recording joined to half the
+  // new one. Holding the lock for the whole upload is what makes the editor
+  // refuse instead of overwriting a file that is being read. It is taken before
+  // the try so a refusal cannot reach a finally that would release somebody
+  // else's hold, and outside the retry loop so a second attempt does not stack
+  // a second hold that the single release would never balance.
+  takeVideoLock(meta.id, 'upload');
   activeUploads.add(meta.id);
   try {
     for (let attempt = 1; attempt <= RETRIES; attempt++) {
@@ -120,6 +129,7 @@ async function runUploadWithRetry(provider: ShareProvider, result: ShareResult, 
     }
   } finally {
     activeUploads.delete(meta.id);
+    releaseVideoLock(meta.id, 'upload');
   }
 }
 
@@ -167,7 +177,21 @@ export async function shareVideo(id: string): Promise<{ url: string }> {
     ? { ...meta.share, url: result.shareUrl, ...(remoteId ? { remoteId } : {}) }
     : { ...shareBlock(provider, result), ...(remoteId ? { remoteId } : {}) };
   library().update(id, { share: block });
-  void runUploadWithRetry(provider, result, { ...meta, share: block });
+  // The upload is deliberately not awaited so the link can be copied straight
+  // away, which leaves a video lock refusal with nowhere to go: an edit already
+  // rewriting video.mp4 stops this upload before its first byte, and without a
+  // handler that would be an unhandled rejection in the main process and a
+  // silent one for the person, who would sit holding a link with no file behind
+  // it. It gets the same loud treatment as an upload that ran out of retries.
+  void runUploadWithRetry(provider, result, { ...meta, share: block }).catch((err) => {
+    const message = err instanceof Error ? err.message : String(err);
+    log.warn(`share upload could not start for ${id}: ${message}`);
+    emitJobProgress({ videoId: id, kind: 'upload', pct: 100, failed: true, note: `Upload failed: ${message}` });
+    broadcast('ol:toast', {
+      kind: 'error',
+      text: `${message} The link you copied is not live until that upload runs.`,
+    });
+  });
   return { url: result.shareUrl };
 }
 
@@ -194,6 +218,11 @@ export async function syncShareCaptions(id: string): Promise<void> {
   }
   activeUploads.add(meta.id);
   try {
+    // This push reads the same recording folder an edit rewrites, so it queues
+    // behind the lock like any other upload. Taken inside the try on purpose:
+    // this helper promises the transcription pipeline it will never throw, so a
+    // refusal has to land in the warning below rather than in the caller.
+    takeVideoLock(meta.id, 'upload');
     await provider.upload(plan, filesDir, (info) => {
       emitJobProgress({ videoId: meta.id, kind: 'upload', pct: info.pct, note: info.note ?? info.file });
     });
@@ -202,6 +231,7 @@ export async function syncShareCaptions(id: string): Promise<void> {
     log.warn(`caption sync to share failed for ${meta.id}: ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     activeUploads.delete(meta.id);
+    releaseVideoLock(meta.id, 'upload');
   }
 }
 
@@ -308,6 +338,10 @@ export async function syncShareThumbnail(id: string): Promise<void> {
   }
   activeUploads.add(meta.id);
   try {
+    // Same reason as the captions push: the frame is written into a folder an
+    // edit rebuilds, and this helper is called without a catch, so the lock is
+    // taken inside the try where a refusal becomes the warning below.
+    takeVideoLock(meta.id, 'upload');
     await provider.upload(plan, filesDir, (info) => {
       emitJobProgress({ videoId: meta.id, kind: 'upload', pct: info.pct, note: info.note ?? info.file });
     });
@@ -316,6 +350,7 @@ export async function syncShareThumbnail(id: string): Promise<void> {
     log.warn(`thumbnail sync to share failed for ${meta.id}: ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     activeUploads.delete(meta.id);
+    releaseVideoLock(meta.id, 'upload');
   }
 }
 

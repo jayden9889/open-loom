@@ -49,6 +49,7 @@ const mirrorBtn = document.getElementById('bubble-mirror')!;
 
 let mirror = true;
 let currentSession: HealthyCameraSession | null = null;
+let cameraLostReported = false;
 
 type BubbleState = 'connecting' | 'live' | 'error';
 
@@ -78,6 +79,24 @@ window.openloomInternal.onBubbleLayout((layout) => {
   requestAnimationFrame(() => bubbleEl.classList.remove('faded'));
 });
 
+/**
+ * The camera can die in the middle of a take: a webcam unplugged, a USB hub
+ * glitch, or a Continuity Camera iPhone carried out of range. Chromium leaves
+ * the last decoded frame painted when that happens, so without this the bubble
+ * looks alive while it is frozen and the face stays frozen for the rest of the
+ * recording, discovered only after the video has been handed over. Main owns
+ * the warning and keeps the take running; the bubble just has to notice and
+ * stop pretending. The engine window watches its own copy of the camera during
+ * window capture, so the flag holds this window to a single report and main
+ * drops the duplicate from the other one.
+ */
+function handleCameraLost(): void {
+  if (cameraLostReported) return;
+  cameraLostReported = true;
+  setState('error');
+  window.openloomInternal.cameraLost();
+}
+
 async function startCamera(): Promise<void> {
   setState('connecting');
   const settings = await window.openloomInternal.getSettings();
@@ -92,6 +111,7 @@ async function startCamera(): Promise<void> {
       width: { ideal: 1280 },
       height: { ideal: 720 },
     });
+    currentSession.stream.getVideoTracks()[0]?.addEventListener('ended', handleCameraLost);
     setState('live');
   } catch {
     setState('error');
@@ -118,6 +138,11 @@ window.openloomInternal.onSettingsChanged((s) => {
 });
 
 window.addEventListener('beforeunload', () => {
+  // Drop the watch before the stream goes. A listener left on a track we have
+  // deliberately finished with could report a camera failure for a window that
+  // is already on its way out, which would put an error toast on a take that
+  // ended perfectly well.
+  currentSession?.stream.getVideoTracks()[0]?.removeEventListener('ended', handleCameraLost);
   currentSession?.stop();
 });
 

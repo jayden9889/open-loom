@@ -209,6 +209,40 @@ function attachVideo(stream: MediaStream): Promise<HTMLVideoElement> {
 // Stream assembly
 // ---------------------------------------------------------------------------
 
+let camLossWatch: { track: MediaStreamTrack; onEnded: () => void } | null = null;
+
+/**
+ * Watch a camera stream for the device disappearing mid take: a webcam
+ * unplugged, a USB hub glitch, or a Continuity Camera iPhone carried out of
+ * range. Window capture burns the camera into the canvas composite, so without
+ * this the take carries on with a face frozen on its last frame and nobody is
+ * told until the video has been handed over. Main owns the warning and keeps
+ * the recording going, because losing the face must never lose the window; the
+ * engine only has to notice. The listener is held here rather than left on the
+ * track so every teardown path can drop it, since a watch that outlived its
+ * session would report a stale loss against the next recording.
+ */
+function watchCameraLoss(stream: MediaStream): void {
+  stopCameraLossWatch();
+  const track = stream.getVideoTracks()[0];
+  if (!track) return;
+  const onEnded = (): void => {
+    // Clearing the watch before reporting keeps a track that fires 'ended'
+    // more than once to a single warning. The bubble window watches the same
+    // camera in this mode and main is what drops its duplicate.
+    stopCameraLossWatch();
+    internal.cameraLost();
+  };
+  track.addEventListener('ended', onEnded);
+  camLossWatch = { track, onEnded };
+}
+
+function stopCameraLossWatch(): void {
+  if (!camLossWatch) return;
+  camLossWatch.track.removeEventListener('ended', camLossWatch.onEnded);
+  camLossWatch = null;
+}
+
 const CAM_DIMENSIONS: Record<string, { width: number; height: number }> = {
   '720p': { width: 1280, height: 720 },
   '1080p': { width: 1920, height: 1080 },
@@ -328,6 +362,7 @@ async function buildSession(p: EngineBeginPayload): Promise<{
           height: { ideal: 720 },
         });
         allStreams.push(camSession.stream);
+        watchCameraLoss(camSession.stream);
         camVideo = el;
       } catch {
         camVideo = null;
@@ -484,6 +519,7 @@ function stopMicMeter(): void {
 
 function teardown(): void {
   stopMicMeter();
+  stopCameraLossWatch();
   if (!session) return;
   const s = session;
   session = null;
@@ -497,6 +533,7 @@ function teardown(): void {
 
 /** Stop the streams from a built-but-not-yet-started session (cancelled during setup). */
 function stopBuilt(built: Awaited<ReturnType<typeof buildSession>>): void {
+  stopCameraLossWatch();
   built.compositor?.stop();
   for (const stream of built.allStreams) {
     for (const track of stream.getTracks()) track.stop();

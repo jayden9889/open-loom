@@ -520,7 +520,13 @@ test('Open Loom full E2E (SPEC §7)', async () => {
       server = await spawnServer();
       record('openloom-server starts (healthz ok)', true, 'pass', server.baseUrl);
     } catch (err) {
-      record('openloom-server starts (healthz ok)', false, 'environment', String(err));
+      // This repo ships the server that just failed to come up, so a spawn that
+      // dies is our own build breaking and not the machine being short of
+      // something it was never going to have. Filed as environment it read as
+      // somebody else's problem, and because it also leaves `server` null every
+      // sharing check downstream quietly skipped itself while the run stayed
+      // green.
+      record('openloom-server starts (healthz ok)', false, 'product-bug', String(err));
     }
 
     if (videoId && server) {
@@ -750,11 +756,15 @@ async function attemptRealRecording(
       detail: `macOS Screen Recording not granted to the Electron dev binary (screen='${perms.screen}'). Grant it in System Settings > Privacy & Security > Screen Recording to record for real.`,
     }];
   }
+  // Hoisted out of the try below because the catch needs to know how far the
+  // capture actually got before it threw. Without that the catch cannot tell a
+  // machine refusing to hand over a display from a product that broke part way
+  // through a capture it had already started, and it has to guess.
+  let reached = false;
   try {
     if (await startBtn.count()) await startBtn.click();
     // Poll the state machine for up to ~12s to reach 'recording'.
     const deadline = Date.now() + 12_000;
-    let reached = false;
     let lastState = '';
     while (Date.now() < deadline) {
       const st = await page.evaluate(() => window.openloomInternal.getRecordingState());
@@ -820,7 +830,24 @@ async function attemptRealRecording(
       bubbleCheck,
     ];
   } catch (err) {
-    return [{ name, ok: false, classification: 'environment', detail: `start/stop failed: ${String(err)}` }];
+    // Which side of 'recording' we fell off on decides whose fault this is.
+    // Before it, a throw is almost always the machine declining to hand over a
+    // screen, so it stays non fatal and a checkout with no Screen Recording
+    // grant still finishes green. After it, the grant was clearly in place and
+    // the capture was already running, so anything thrown out of
+    // startRecording or stopRecording from there is ours. Calling that
+    // environment is exactly what let a broken stop path through: the throw
+    // was written into the report as somebody else's problem and the suite
+    // still exited 0, so the one check this whole spec exists for could not
+    // fail.
+    return [{
+      name,
+      ok: false,
+      classification: reached ? 'product-bug' : 'environment',
+      detail: reached
+        ? `threw after capture had already reached 'recording': ${String(err)}`
+        : `threw before capture reached 'recording': ${String(err)}`,
+    }];
   }
 }
 
