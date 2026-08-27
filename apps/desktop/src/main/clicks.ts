@@ -35,6 +35,13 @@ async function loadModule(): Promise<UiohookModule | null> {
   }
 }
 
+/**
+ * Whether the native module is usable. It says nothing about the macOS
+ * Accessibility grant, which is the other half of the answer and is carried by
+ * `accessibility` on the same permissions snapshot. Reading this alone reports
+ * click highlights as fine on a machine where the hook starts, receives
+ * nothing and draws nothing.
+ */
 export function clickHighlightsAvailable(): boolean {
   return !loadFailed;
 }

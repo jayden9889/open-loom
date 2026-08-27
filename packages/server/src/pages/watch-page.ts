@@ -140,9 +140,17 @@ a:hover { text-decoration: underline; }
 .scrub { flex: 1; height: 24px; display: flex; align-items: center; cursor: pointer; position: relative; touch-action: none; }
 .scrub .track { position: relative; width: 100%; height: 4px; border-radius: 999px; background: var(--ol-border-strong); overflow: visible; }
 .scrub .buffered { position: absolute; inset: 0 auto 0 0; border-radius: 999px; background: var(--ol-text-tertiary); opacity: .5; width: 0; }
-.scrub .played { position: absolute; inset: 0 auto 0 0; border-radius: 999px; background: var(--ol-accent); width: 0; }
-.scrub .knob { position: absolute; top: 50%; width: 12px; height: 12px; border-radius: 999px; background: var(--ol-accent); transform: translate(-50%, -50%) scale(0); transition: transform 120ms var(--ol-ease); }
-.scrub:hover .knob, .scrub.dragging .knob { transform: translate(-50%, -50%) scale(1); }
+/* Playhead parts are moved with transforms, not width and left. Writing a
+   layout property on every timeupdate sample put the bar through layout four
+   times a second and made it visibly jump; a transform stays on the
+   compositor. Neither carries a transition, so the motion is linear. */
+.scrub .played { position: absolute; inset: 0 auto 0 0; width: 100%; border-radius: 999px; background: var(--ol-accent); transform: scaleX(0); transform-origin: left center; will-change: transform; }
+/* Full width layer translated by a percentage of its own width, so the offset
+   needs no measurement of the track. The dot keeps its own scale transition,
+   which is why it cannot share an element with the moving transform. */
+.scrub .knob { position: absolute; inset: 0 auto 0 0; width: 100%; pointer-events: none; will-change: transform; }
+.scrub .knob .dot { position: absolute; top: 50%; left: 0; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 999px; background: var(--ol-accent); transform: scale(0); transition: transform 120ms var(--ol-ease); }
+.scrub:hover .knob .dot, .scrub.dragging .knob .dot { transform: scale(1); }
 .scrub .tip { position: absolute; bottom: 18px; transform: translateX(-50%); background: var(--ol-text); color: var(--ol-bg); font-size: 11px; padding: 2px 6px; border-radius: 6px; display: none; font-variant-numeric: tabular-nums; }
 .scrub:hover .tip { display: block; }
 
@@ -404,6 +412,9 @@ const WATCH_JS = String.raw`
   video.addEventListener('loadedmetadata', function () {
     if (isFinite(video.duration) && video.duration > 0) duration = video.duration;
     esc(durEl, fmt(duration));
+    // The real duration usually differs from the stored one, which makes every
+    // fraction painted before this point wrong.
+    paintPlayhead();
   });
   esc(durEl, fmt(duration));
 
@@ -424,10 +435,35 @@ const WATCH_JS = String.raw`
     if (dragging) video.currentTime = pct * duration;
   });
   scrub.addEventListener('pointerup', function () { dragging = false; scrub.classList.remove('dragging'); });
+  // timeupdate only fires about four times a second, so a playhead written
+  // from it steps in visible quarter second jumps. Sample currentTime every
+  // animation frame while playing instead and move both parts with a
+  // transform, the way the desktop editor does. Reading the clock per frame is
+  // linear by construction, so nothing decelerates into each sample.
+  function paintPlayhead() {
+    var f = duration ? video.currentTime / duration : 0;
+    if (f < 0) f = 0;
+    if (f > 1) f = 1;
+    played.style.transform = 'scaleX(' + f + ')';
+    knob.style.transform = 'translateX(' + f * 100 + '%)';
+  }
+  var playRaf = 0;
+  function tickPlayhead() {
+    paintPlayhead();
+    playRaf = requestAnimationFrame(tickPlayhead);
+  }
+  video.addEventListener('play', function () {
+    if (!playRaf) playRaf = requestAnimationFrame(tickPlayhead);
+  });
+  // Stopping the loop when paused keeps an idle tab off the compositor; the
+  // last paint still lands so a pause or a seek is not left a frame behind.
+  video.addEventListener('pause', function () {
+    if (playRaf) cancelAnimationFrame(playRaf);
+    playRaf = 0;
+    paintPlayhead();
+  });
   video.addEventListener('timeupdate', function () {
-    var pct = duration ? (video.currentTime / duration) * 100 : 0;
-    played.style.width = pct + '%';
-    knob.style.left = pct + '%';
+    paintPlayhead();
     esc(curEl, fmt(video.currentTime));
     markCoverage(video.currentTime);
     highlightChapter(video.currentTime);
@@ -887,7 +923,7 @@ export function renderWatchPage(data: WatchPageData): string {
       <div class="track">
         <div class="buffered" id="ol-buffered"></div>
         <div class="played" id="ol-played"></div>
-        <div class="knob" id="ol-knob"></div>
+        <div class="knob" id="ol-knob"><span class="dot"></span></div>
       </div>
       <div class="tip" id="ol-tip">0:00</div>
     </div>

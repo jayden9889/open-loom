@@ -111,7 +111,10 @@ video { display: block; width: 100%; max-height: 72vh; background: #000; }
 .time { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--ol-text-secondary); padding: 0 6px; white-space: nowrap; }
 .scrub { flex: 1; height: 24px; display: flex; align-items: center; cursor: pointer; position: relative; touch-action: none; }
 .scrub .track { position: relative; width: 100%; height: 4px; border-radius: 999px; background: var(--ol-border-strong); }
-.scrub .played { position: absolute; inset: 0 auto 0 0; border-radius: 999px; background: var(--ol-accent); width: 0; }
+/* Full width bar scaled from its left edge rather than resized. Writing width
+   put the playhead through layout on every sample; a transform stays on the
+   compositor. No transition on it, so the motion is linear and never eases. */
+.scrub .played { position: absolute; inset: 0 auto 0 0; width: 100%; border-radius: 999px; background: var(--ol-accent); transform: scaleX(0); transform-origin: left center; will-change: transform; }
 .speed { font-size: 12px; font-weight: 600; width: auto; padding: 0 8px; }
 .menu { position: absolute; bottom: 44px; right: 12px; background: var(--ol-surface); border: 1px solid var(--ol-border); border-radius: var(--ol-radius-control); box-shadow: var(--ol-elev-card); padding: 4px; display: none; min-width: 80px; z-index: 5; }
 .menu.open { display: block; }
@@ -174,14 +177,43 @@ const JS = String.raw`
   video.addEventListener('loadedmetadata', function () {
     if (isFinite(video.duration) && video.duration > 0) duration = video.duration;
     dur.textContent = fmt(duration);
+    // The real duration usually differs from the stored one, which makes every
+    // fraction painted before this point wrong.
+    paintPlayhead();
   });
   dur.textContent = fmt(duration);
   scrub.addEventListener('pointerdown', function (e) {
     var rect = scrub.getBoundingClientRect();
     video.currentTime = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width)) * duration;
   });
+  // timeupdate only fires about four times a second, so a playhead written
+  // from it steps in visible quarter second jumps. Sample currentTime every
+  // animation frame while playing instead and move the bar with a transform,
+  // the way the desktop editor does. Reading the clock per frame is linear by
+  // construction, so nothing decelerates into each sample.
+  function paintPlayhead() {
+    var f = duration ? video.currentTime / duration : 0;
+    if (f < 0) f = 0;
+    if (f > 1) f = 1;
+    played.style.transform = 'scaleX(' + f + ')';
+  }
+  var playRaf = 0;
+  function tickPlayhead() {
+    paintPlayhead();
+    playRaf = requestAnimationFrame(tickPlayhead);
+  }
+  video.addEventListener('play', function () {
+    if (!playRaf) playRaf = requestAnimationFrame(tickPlayhead);
+  });
+  // Stopping the loop when paused keeps an idle tab off the compositor; the
+  // last paint still lands so a pause or a seek is not left a frame behind.
+  video.addEventListener('pause', function () {
+    if (playRaf) cancelAnimationFrame(playRaf);
+    playRaf = 0;
+    paintPlayhead();
+  });
   video.addEventListener('timeupdate', function () {
-    played.style.width = (duration ? (video.currentTime / duration) * 100 : 0) + '%';
+    paintPlayhead();
     cur.textContent = fmt(video.currentTime);
     var rows = document.querySelectorAll('.row-btn');
     for (var i = 0; i < rows.length; i++) {

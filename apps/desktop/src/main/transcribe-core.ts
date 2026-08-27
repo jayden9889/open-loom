@@ -441,69 +441,6 @@ export function createOpenAiEngine(cfg: OpenAiEngineConfig): TranscriptionProvid
   };
 }
 
-/**
- * A minimal 16kHz mono PCM WAV of silence, built in memory for the Settings
- * "Test connection" probe (no ffmpeg or temp file needed).
- */
-export function buildSilentWav(durationSec: number): Buffer {
-  const sampleRate = 16000;
-  const samples = Math.max(1, Math.round(durationSec * sampleRate));
-  const dataBytes = samples * 2;
-  const buf = Buffer.alloc(44 + dataBytes);
-  buf.write('RIFF', 0);
-  buf.writeUInt32LE(36 + dataBytes, 4);
-  buf.write('WAVE', 8);
-  buf.write('fmt ', 12);
-  buf.writeUInt32LE(16, 16);
-  buf.writeUInt16LE(1, 20); // PCM
-  buf.writeUInt16LE(1, 22); // mono
-  buf.writeUInt32LE(sampleRate, 24);
-  buf.writeUInt32LE(sampleRate * 2, 28); // byte rate
-  buf.writeUInt16LE(2, 32); // block align
-  buf.writeUInt16LE(16, 34); // bits per sample
-  buf.write('data', 36);
-  buf.writeUInt32LE(dataBytes, 40);
-  return buf;
-}
-
-/**
- * Settings "Test connection" for the API engine: posts one second of silence
- * to the configured endpoint and reports pass/fail. Mirrors ai-core's
- * testConnection so the transcription pane can verify its config before a
- * real recording depends on it.
- */
-export async function testTranscriptionEndpoint(
-  cfg: Pick<OpenAiEngineConfig, 'endpoint' | 'apiKey' | 'model' | 'fetchImpl'>
-): Promise<{ ok: boolean; error?: string }> {
-  const doFetch = cfg.fetchImpl ?? fetch;
-  if (!cfg.endpoint.trim()) {
-    return { ok: false, error: 'Set the transcription endpoint URL in Settings first.' };
-  }
-  const url = normalizeTranscriptionEndpoint(cfg.endpoint);
-  const form = new FormData();
-  form.set('file', new Blob([new Uint8Array(buildSilentWav(1))], { type: 'audio/wav' }), 'test.wav');
-  form.set('model', cfg.model || 'whisper-1');
-  const headers: Record<string, string> = {};
-  if (cfg.apiKey) headers['Authorization'] = `Bearer ${cfg.apiKey}`;
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 30_000);
-    let res: Response;
-    try {
-      res = await doFetch(url, { method: 'POST', headers, body: form, signal: controller.signal });
-    } finally {
-      clearTimeout(timer);
-    }
-    if (!res.ok) {
-      const body = (await res.text()).slice(0, 300);
-      return { ok: false, error: `The transcription endpoint returned ${res.status}: ${body}` };
-    }
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: `Could not reach the transcription endpoint (${url}): ${err instanceof Error ? err.message : String(err)}` };
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Engine-agnostic pipeline
 // ---------------------------------------------------------------------------

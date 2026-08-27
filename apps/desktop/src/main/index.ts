@@ -11,7 +11,7 @@ import { registerIpc } from './ipc';
 import { registerEngineIpc, isRecordingActive, installQuitGuard } from './recorder-ipc';
 import { createMainWindow, showLauncher } from './windows';
 import { getSettings } from './settings';
-import { ensureFfmpeg } from './ffmpeg';
+import { ensureFfmpeg, jobsActive, cancelJobsForQuit } from './ffmpeg';
 import { installShortcuts, unregisterAllShortcuts } from './shortcuts';
 import { installTray } from './tray';
 import { installClickHighlights, shutdownClickHighlights } from './clicks';
@@ -91,27 +91,60 @@ if (!gotLock) {
 
   // Quitting mid-upload silently threw the upload away. Ask first; a confirmed
   // quit aborts the uploads cleanly (which also releases Google's sessions).
-  let quitWithUploadsApproved = false;
+  let quitApproved = false;
+
+  /**
+   * Called by the handler below once it has vetoed the current quit, so the
+   * app is still alive while the encoders stop. Quitting from a promise rather
+   * than from inside the handler also stops Electron re entering 'before-quit'
+   * while a modal dialog from that same handler is still on screen, which is
+   * how one quit could raise the same question twice.
+   */
+  const finishQuit = (): void => {
+    void cancelJobsForQuit()
+      .catch((err) => log.warn(`cancelling ffmpeg jobs on quit failed: ${String(err)}`))
+      .finally(() => {
+        quitApproved = true;
+        app.quit();
+      });
+  };
+
   app.on('before-quit', (event) => {
-    if (quitWithUploadsApproved) return;
+    if (quitApproved) return;
+    // Electron runs every 'before-quit' listener, and this one is registered at
+    // module load while installQuitGuard's recording listener is registered on
+    // ready, so this one runs first. Cancelling uploads here therefore fired
+    // before the user had answered the recording question, and answering "Keep
+    // recording" then vetoed the quit with the uploads already dead and the app
+    // still running. Standing aside settles the recording first: both of its
+    // quitting answers call app.quit() again, and this handler does its work on
+    // that pass, by which point no recording is active.
+    if (isRecordingActive()) return;
     const count = youtubeUploadsInFlight();
-    if (count === 0) return;
-    event.preventDefault();
-    const choice = dialog.showMessageBoxSync({
-      type: 'question',
-      buttons: ['Keep uploading', 'Quit and cancel upload'],
-      defaultId: 0,
-      cancelId: 0,
-      message:
-        count === 1
-          ? 'A YouTube upload is still running.'
-          : `${count} YouTube uploads are still running.`,
-      detail: 'Quitting now cancels it, and the video will not appear on your channel.',
-    });
-    if (choice === 1) {
-      quitWithUploadsApproved = true;
+    if (count > 0) {
+      event.preventDefault();
+      const choice = dialog.showMessageBoxSync({
+        type: 'question',
+        buttons: ['Keep uploading', 'Quit and cancel upload'],
+        defaultId: 0,
+        cancelId: 0,
+        message:
+          count === 1
+            ? 'A YouTube upload is still running.'
+            : `${count} YouTube uploads are still running.`,
+        detail: 'Quitting now cancels it, and the video will not appear on your channel.',
+      });
+      if (choice !== 1) return;
       youtubeCancelAllPublishes();
-      app.quit();
+      finishQuit();
+      return;
+    }
+    // No upload question to ask, but an encode still needs stopping: quitting
+    // under a running ffmpeg job orphaned the child process and left a part
+    // written file where a finished one was expected.
+    if (jobsActive()) {
+      event.preventDefault();
+      finishQuit();
     }
   });
 

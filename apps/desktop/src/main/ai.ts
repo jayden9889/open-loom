@@ -11,6 +11,7 @@ import { VIDEO_FILES } from '@shared/types';
 import { getSettings, getSecret } from './settings';
 import { library } from './library';
 import { emitJobProgress } from './ffmpeg';
+import { broadcast } from './windows';
 import { AI_KINDS, generate, testConnection, type AiKind, type AiProviderConfig } from './ai-core';
 import { log } from './logger';
 
@@ -120,7 +121,9 @@ export async function generateAI(id: string, kinds: string[], force = false): Pr
     store.update(id, patch);
     emitJobProgress({ videoId: id, kind: 'ai', pct: 100, note: 'AI results ready' });
   } catch (err) {
-    emitJobProgress({ videoId: id, kind: 'ai', pct: 100, note: 'AI generation failed' });
+    // `failed` is what stops the progress strip reading this as a finished
+    // job: every consumer treats pct 100 alone as success (JobProgress docs).
+    emitJobProgress({ videoId: id, kind: 'ai', pct: 100, note: 'AI generation failed', failed: true });
     if (flight.controller.signal.aborted) {
       throw new Error(
         flight.timedOut
@@ -142,9 +145,13 @@ export function looksAutoNamed(title: string): boolean {
 
 /**
  * Auto-run hook chained after transcription (SPEC A1). Never forces, so
- * hand-edited results survive an automatic pass. A failure is persisted on
- * the video (meta.ai.error) so the renderer can show it instead of the user
- * concluding the feature silently does nothing.
+ * hand-edited results survive an automatic pass.
+ *
+ * A failure is both toasted and persisted on the video (meta.ai.error). The
+ * toast is the half that reaches the user: this runs in the background, no
+ * code has ever read meta.ai.error back, and the job progress note is emitted
+ * at pct 100 where the renderer clears the strip without showing it. Storing
+ * the reason alone left the user with no AI title and no idea why.
  */
 export async function maybeAutoGenerateAI(id: string): Promise<void> {
   const cfg = getSettings().ai;
@@ -158,6 +165,7 @@ export async function maybeAutoGenerateAI(id: string): Promise<void> {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.warn(`auto AI generation for ${id} failed: ${msg}`);
+    broadcast('ol:toast', { kind: 'error', text: `AI results were not generated. ${msg}` });
     try {
       const meta = library().get(id);
       library().update(id, { ai: { ...meta.ai, error: msg } });

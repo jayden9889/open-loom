@@ -600,6 +600,15 @@ export interface PermissionsSnapshot {
    * click, so this snapshot is the only place the truth is visible.
    */
   accessibility: PermissionStatus;
+  /**
+   * Whether the optional uiohook-napi native module that click highlights ride
+   * on actually loaded and has not failed since. Deliberately separate from
+   * `accessibility`: false here means the module is missing or broke, while
+   * true alongside a denied `accessibility` means the hook runs and simply
+   * never sees a click. Only the pair tells the UI which one to send the user
+   * to fix.
+   */
+  clickHighlights: boolean;
   ffmpeg: boolean;
   whisper: boolean;
   /**

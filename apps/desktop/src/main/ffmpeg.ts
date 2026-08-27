@@ -119,6 +119,55 @@ export function jobsActive(): boolean {
   return running !== null || queue.length > 0;
 }
 
+/** Resolved by pump() once the queue empties, so the quit path can await it. */
+const idleWaiters: Array<() => void> = [];
+
+function whenIdle(): Promise<void> {
+  if (!jobsActive()) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    idleWaiters.push(resolve);
+  });
+}
+
+/**
+ * Stop every job for a quit. Nothing used to cancel or await these, so quitting
+ * mid encode orphaned the ffmpeg child: it either outlived the app or died
+ * leaving a part written output where the finished one belongs.
+ *
+ * Aborting first is the deterministic half. Queued jobs then reject before they
+ * ever spawn anything, and the running job's AbortSignal SIGTERMs its child.
+ * The short wait that follows is what lets that job's own cleanup actually run,
+ * because a trim only swaps its temp file onto video.mp4 after a clean finish
+ * and only deletes that temp file and releases the edit lock in its finally.
+ * Killing the process a tick earlier leaves .edit-tmp.mp4 and a stuck lock.
+ *
+ * The wait is bounded at three seconds because a SIGTERMed ffmpeg exits in well
+ * under one, and the jobs that ignore their signal (remux, transcode, preview
+ * work) can run for minutes. Quit is never held hostage to those; we log the
+ * kind that outstayed the deadline instead.
+ */
+export async function cancelJobsForQuit(timeoutMs = 3000): Promise<boolean> {
+  if (!jobsActive()) return true;
+  const lastKind = running?.kind ?? queue[0]?.kind ?? 'unknown';
+  for (const job of queue) job.controller.abort();
+  running?.controller.abort();
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([
+    whenIdle(),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, timeoutMs);
+    }),
+  ]);
+  if (timer) clearTimeout(timer);
+  if (jobsActive()) {
+    log.warn(
+      `quit did not drain ffmpeg job ${running?.kind ?? lastKind}; its child may outlive the app`
+    );
+    return false;
+  }
+  return true;
+}
+
 async function pump(): Promise<void> {
   if (running) return;
   const job = queue.shift();
@@ -152,6 +201,11 @@ async function pump(): Promise<void> {
     if (lockKind && videoLockHolder(job.videoId) === lockKind) releaseVideoLock(job.videoId, lockKind);
     running = null;
     void pump();
+    // pump() sets running synchronously before its first await, so by here the
+    // queue state is settled and a waiting quit can be released. Signalling
+    // rather than polling is what keeps the quit wait honest: it ends the tick
+    // the last job's cleanup finished, not a fixed delay later.
+    if (!jobsActive()) for (const waiter of idleWaiters.splice(0)) waiter();
   }
 }
 

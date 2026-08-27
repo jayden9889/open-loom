@@ -21,6 +21,7 @@ import {
   runTranscriptionPipeline,
 } from './transcribe-core';
 import { log } from './logger';
+import { broadcast } from './windows';
 import { maybeAutoGenerateAI } from './ai';
 import { syncShareCaptions } from './share';
 
@@ -130,7 +131,13 @@ export async function transcribeVideo(id: string): Promise<void> {
           outDir: store.videoDir(id),
           onProgress: (pct) => report(8 + Math.round(pct * 0.9), engineNote),
         });
-        store.update(id, { transcript: { language: result.language, engine: result.engine } });
+        // Clearing transcriptError here is what keeps a failure notice
+        // temporary: a retry that works must not leave the old reason sitting
+        // on the video for the Transcript tab to keep showing.
+        store.update(id, {
+          transcript: { language: result.language, engine: result.engine },
+          transcriptError: undefined,
+        });
         report(100, 'Transcript ready');
       } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
@@ -148,13 +155,29 @@ export async function transcribeVideo(id: string): Promise<void> {
   void maybeAutoGenerateAI(id).catch((err) => log.warn(`auto AI after transcription failed: ${String(err)}`));
 }
 
-/** Auto-transcribe hook, called after a recording finishes processing (SPEC T1). */
+/**
+ * Auto-transcribe hook, called after a recording finishes processing (SPEC T1).
+ *
+ * A failure is both toasted and written to meta.transcriptError. A log line
+ * reaches nobody, and this runs in the background, so without the toast the
+ * user is left with no transcript, no AI results chained off it, and no reason
+ * for either. The stored field is the record they can still see later.
+ */
 export function maybeAutoTranscribe(videoId: string): void {
   const cfg = getSettings().transcription;
   if (!cfg.auto || cfg.engine === 'off') return;
-  void transcribeVideo(videoId).catch((err) =>
-    log.warn(`auto-transcribe for ${videoId} failed: ${err instanceof Error ? err.message : String(err)}`)
-  );
+  void transcribeVideo(videoId).catch((err) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn(`auto-transcribe for ${videoId} failed: ${msg}`);
+    broadcast('ol:toast', { kind: 'error', text: `That recording was not transcribed. ${msg}` });
+    try {
+      library().update(videoId, { transcriptError: msg });
+    } catch (persistErr) {
+      // The video can be deleted while its transcription is still running, so
+      // a missing meta here must not turn into an unhandled rejection.
+      log.warn(`could not record the transcription failure on ${videoId}: ${String(persistErr)}`);
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------

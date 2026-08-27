@@ -12,7 +12,8 @@
  * dragging paints a removal range; Split cuts at the playhead; Remove/Restore
  * act on the selection; Cut quiet parts marks detected silences as removed.
  * Everything is non-destructive until Save (Cmd/Ctrl+S), every change can be
- * undone (Cmd/Ctrl+Z), and leaving with unsaved cuts asks first.
+ * undone (Cmd/Ctrl+Z) and redone (Cmd/Ctrl+Shift+Z), and leaving with unsaved
+ * cuts asks first.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { JobProgress, VideoMeta } from '@shared/types';
@@ -262,6 +263,10 @@ export function EditorView({
   const [videoError, setVideoError] = useState<string | null>(null);
   const [videoReady, setVideoReady] = useState(false);
   const [history, setHistory] = useState<Seg[][]>([]);
+  // Layouts that undo stepped back off, newest last. Any fresh edit empties it,
+  // because redoing onto a branch the user has moved off would restore a layout
+  // that never existed.
+  const [future, setFuture] = useState<Seg[][]>([]);
   const [detecting, setDetecting] = useState(false);
   // 'back' = the editor's own Back button, 'nav' = the shell asked to leave,
   // 'close' = the window is closing. All three show the same unsaved-cuts modal.
@@ -300,6 +305,9 @@ export function EditorView({
     setSelected(null);
     setRangeSel(null);
     setHistory([]);
+    // A reload replaces the whole timeline, so redo steps from the old file
+    // would splice segment times onto a video they were never measured against.
+    setFuture([]);
   }, []);
 
   const loadMeta = useCallback(async () => {
@@ -573,8 +581,12 @@ export function EditorView({
       return;
     }
     if ((e.metaKey || e.ctrlKey) && (e.key === 'z' || e.key === 'Z')) {
+      // Shift makes it redo. Without this branch Cmd+Shift+Z fell through to
+      // undo and stepped backwards a second time, which is the opposite of
+      // what the shortcut means everywhere else on macOS.
       e.preventDefault();
-      undo();
+      if (e.shiftKey) redo();
+      else undo();
       return;
     }
     // No other modified key means anything here; without this guard Cmd+S used
@@ -613,22 +625,37 @@ export function EditorView({
   /** Apply a new segment layout, remembering the old one for undo. */
   const applySegs = (next: Seg[]) => {
     setHistory((h) => [...h.slice(-49), segs]);
+    setFuture([]);
     setSegs(next);
     setSelected(null);
     setRangeSel(null);
   };
 
+  /**
+   * Step back one layout and bank the one being left on the redo stack, so
+   * Cmd+Shift+Z can put it back. Reads segs from the render it was built in
+   * rather than from a state updater, which is how applySegs already reads it.
+   */
   const undo = useCallback(() => {
-    setHistory((h) => {
-      const prev = h[h.length - 1];
-      if (prev) {
-        setSegs(prev);
-        setSelected(null);
-        setRangeSel(null);
-      }
-      return h.slice(0, -1);
-    });
-  }, []);
+    const prev = history[history.length - 1];
+    if (!prev) return;
+    setFuture((f) => [...f.slice(-49), segs]);
+    setHistory((h) => h.slice(0, -1));
+    setSegs(prev);
+    setSelected(null);
+    setRangeSel(null);
+  }, [history, segs]);
+
+  /** The mirror of undo: step forward again, banking the current layout for undo. */
+  const redo = useCallback(() => {
+    const next = future[future.length - 1];
+    if (!next) return;
+    setHistory((h) => [...h.slice(-49), segs]);
+    setFuture((f) => f.slice(0, -1));
+    setSegs(next);
+    setSelected(null);
+    setRangeSel(null);
+  }, [future, segs]);
 
   const splitAtPlayhead = () => {
     const t = videoRef.current?.currentTime ?? current;
@@ -710,8 +737,10 @@ export function EditorView({
   const dragHandle = (edge: 'in' | 'out') => (downEvent: React.PointerEvent) => {
     downEvent.preventDefault();
     downEvent.stopPropagation();
-    // One undo step per drag, not per pointer move.
+    // One undo step per drag, not per pointer move. Dragging a handle is a new
+    // edit, so it drops any redo steps the same way applySegs does.
     setHistory((h) => [...h.slice(-49), segs]);
+    setFuture([]);
     // A trackpad emits 120+ moves/sec and every currentTime write starts a
     // decoder seek, so applying per-move made the drag stutter. Batch to one
     // apply per animation frame with the latest pointer position.
@@ -1133,7 +1162,32 @@ export function EditorView({
       )}
 
       <div className="editor-player">
-        {videoError ? (
+        {!videoReady && !videoError && <div className="player-skeleton" aria-hidden="true" />}
+        {/* The video element stays mounted through a media error and is only
+            hidden, with the error panel laid over it. Unmounting it left
+            videoRef null and left anything waiting on the element polling a
+            node that could never appear again, so the wait hung instead of
+            recovering or failing. Hidden means the element can reload itself
+            and readiness can still resolve. */}
+        <video
+          ref={videoRef}
+          className={videoReady && !videoError ? 'ready' : ''}
+          src={videoUrl}
+          poster={posterUrl}
+          preload="auto"
+          onClick={togglePlay}
+          onLoadedData={() => {
+            setVideoReady(true);
+            // Decodable frames mean the error is no longer true, so the panel
+            // must not sit over a working player after a recovered reload.
+            setVideoError(null);
+          }}
+          onPlay={() => setPlaying(true)}
+          onPause={() => setPlaying(false)}
+          onTimeUpdate={(e) => setCurrent((e.target as HTMLVideoElement).currentTime)}
+          onError={() => setVideoError('This video file could not be loaded for editing.')}
+        />
+        {videoError && (
           <div className="player-error">
             <Icon.Warning width={28} height={28} />
             <p>{videoError}</p>
@@ -1151,23 +1205,6 @@ export function EditorView({
               </button>
             </div>
           </div>
-        ) : (
-          <>
-            {!videoReady && <div className="player-skeleton" aria-hidden="true" />}
-            <video
-              ref={videoRef}
-              className={videoReady ? 'ready' : ''}
-              src={videoUrl}
-              poster={posterUrl}
-              preload="auto"
-              onClick={togglePlay}
-              onLoadedData={() => setVideoReady(true)}
-              onPlay={() => setPlaying(true)}
-              onPause={() => setPlaying(false)}
-              onTimeUpdate={(e) => setCurrent((e.target as HTMLVideoElement).currentTime)}
-              onError={() => setVideoError('This video file could not be loaded for editing.')}
-            />
-          </>
         )}
         {!playing && !videoError && videoReady && (
           <button type="button" className="player-big-play" aria-label="Play preview" onClick={togglePlay}>
@@ -1192,6 +1229,18 @@ export function EditorView({
           onClick={undo}
         >
           <Icon.Undo width={15} height={15} />
+        </button>
+        <button
+          type="button"
+          className="icon-btn"
+          aria-label="Redo the last undone edit step"
+          title="Redo (Cmd+Shift+Z)"
+          disabled={future.length === 0 || busy}
+          onClick={redo}
+        >
+          {/* Mirrored undo arrow: the icon set has no redo glyph, and a flipped
+              arrow reads as redo without shipping a second asset. */}
+          <Icon.Undo width={15} height={15} style={{ transform: 'scaleX(-1)' }} />
         </button>
         <div className="controls-spacer" />
         <span className="editor-result-len" title="Length before and after this edit">

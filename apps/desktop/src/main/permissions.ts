@@ -11,6 +11,12 @@ import type { PermissionsSnapshot, PermissionStatus } from '@shared/types';
 import { ffmpegAvailable } from './ffmpeg';
 import { getSettings, saveDirProblem } from './settings';
 import { bitmapChannelSpread, classifyScreenProbe } from './permissions-core';
+// Click highlight availability rides this snapshot because it is the health
+// check the app already re-runs at boot, on focus and from every Re-check
+// button, so it needs no new IPC channel. Nothing in the resulting import ring
+// (permissions, clicks, recorder-ipc, capture) runs anything at module load,
+// so every binding is read long after all four have initialised.
+import { clickHighlightsAvailable } from './clicks';
 import { log } from './logger';
 
 const isMac = process.platform === 'darwin';
@@ -128,6 +134,7 @@ export async function getPermissions(force = false): Promise<PermissionsSnapshot
     camera: mediaStatus('camera'),
     mic: mediaStatus('microphone'),
     accessibility: accessibilityStatus(),
+    clickHighlights: clickHighlightsAvailable(),
     ffmpeg: ffmpegAvailable(),
     whisper: whisperAvailable(),
     saveDirProblem: saveDirProblem(),

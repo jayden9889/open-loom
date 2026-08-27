@@ -226,10 +226,6 @@ export function destroyLauncher(reason = 'unspecified'): void {
   launcherWindow = null;
 }
 
-export function getLauncherWindow(): BrowserWindow | null {
-  return launcherWindow && !launcherWindow.isDestroyed() ? launcherWindow : null;
-}
-
 // ---------------------------------------------------------------------------
 // Overlay + engine windows (recording session)
 // ---------------------------------------------------------------------------
@@ -537,10 +533,6 @@ export function destroySwitcher(): void {
   switcherWindow = null;
 }
 
-export function getSwitcherWindow(): BrowserWindow | null {
-  return switcherWindow && !switcherWindow.isDestroyed() ? switcherWindow : null;
-}
-
 // ---------------------------------------------------------------------------
 // Talking-notes overlay (something to read while recording)
 // ---------------------------------------------------------------------------
@@ -708,17 +700,9 @@ export function getOrCreateEngineWindow(): BrowserWindow {
   return engineWindow;
 }
 
-export function getEngineWindow(): BrowserWindow | null {
-  return engineWindow && !engineWindow.isDestroyed() ? engineWindow : null;
-}
-
 export function destroyEngineWindow(): void {
   if (engineWindow && !engineWindow.isDestroyed()) engineWindow.destroy();
   engineWindow = null;
-}
-
-export function getHudWindow(): BrowserWindow | null {
-  return hudWindow && !hudWindow.isDestroyed() ? hudWindow : null;
 }
 
 // ---------------------------------------------------------------------------
