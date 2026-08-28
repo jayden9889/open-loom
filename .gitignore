@@ -26,3 +26,6 @@ docs/media/open-loom-facefirst.mp4
 # Self-hosted share server data dir - writes a live api-key.txt
 openloom-data/
 *.bak
+
+# Per-install marker for the weekly update check (see AGENTS.md). Never shared.
+.openloom-update-check
