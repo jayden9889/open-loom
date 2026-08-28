@@ -29,3 +29,4 @@ openloom-data/
 
 # Per-install marker for the weekly update check (see AGENTS.md). Never shared.
 .openloom-update-check
+.openloom-pre-update

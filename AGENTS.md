@@ -31,6 +31,9 @@ If a check is due, carry on. Write the marker only after the check finishes:
 touch .openloom-update-check
 ```
 
+Both `.openloom-update-check` and `.openloom-pre-update` are gitignored, so they
+stay on this install and never travel anywhere.
+
 ### Step 1. Find the real upstream
 
 The official repo is **`jayden9889/open-loom`**. It is the only source of
@@ -82,9 +85,11 @@ decide between merge and rebase. Do not force either.
 
 ### Step 4. Update
 
-Only once the tree is clean and the user has agreed:
+Only once the tree is clean and the user has agreed. Record where you were
+first, so a rollback is possible without guessing:
 
 ```bash
+git rev-parse HEAD > .openloom-pre-update
 git merge --ff-only <remote>/main
 ```
 
@@ -95,7 +100,9 @@ back to step 3 and let the user choose.
 ### Step 5. Rebuild, because source alone is not the app
 
 ```bash
-git diff --name-only HEAD@{1} HEAD | grep -q package-lock.json && npm ci
+# Compare against the SHA recorded in step 4, not HEAD@{1}: the reflog moves
+# under any git command and is not a reliable "where I was" marker.
+git diff --name-only "$(cat .openloom-pre-update)" HEAD | grep -q package-lock.json && npm ci
 npm run build
 ```
 
@@ -109,12 +116,21 @@ npm run typecheck && npm run lint && npm test
 ```
 
 If any of those fail, say so with the output and **do not** claim the update
-succeeded. An update that breaks the build is worse than no update, and the user
-can go back:
+succeeded. An update that breaks the build is worse than no update.
+
+If the gates fail, offer the user a rollback. Do not perform it unprompted, and
+re-check the tree is clean first, because by then they may have started fixing
+things and a reset would take that with it:
 
 ```bash
-git reset --hard HEAD@{1}   # only to undo an update THIS procedure just made
+# Only with the user's agreement, and only if `git status --porcelain` is empty.
+git merge --ff-only "$(cat .openloom-pre-update)" 2>/dev/null \
+  || git reset --keep "$(cat .openloom-pre-update)"
 ```
+
+`--keep` rather than `--hard` on purpose: it refuses when the move would discard
+uncommitted work, where `--hard` deletes it without asking. If it refuses, that
+refusal is information. Stop and show the user.
 
 Then `touch .openloom-update-check` and tell the user what changed, in plain
 language, based on the commit subjects from step 2.
