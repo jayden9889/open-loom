@@ -75,8 +75,53 @@ export function isDeskViewCamera(label: string | undefined): boolean {
   return (label ?? '').toLowerCase().includes('desk view');
 }
 
-/** Lower sorts earlier. Built-in first, Desk View last. */
+/**
+ * A software camera that other apps publish: OBS, Snap, mmhmm, Camo and the
+ * like. These are never a face by default. OBS in particular enumerates FIRST
+ * on a Mac that has it installed and shows the OBS logo on a blue card when OBS
+ * itself is not running, so taking the first camera in the list put a logo
+ * where the user's face should be. That is what this rank exists to stop.
+ */
+export function isVirtualCamera(label: string | undefined): boolean {
+  const l = (label ?? '').toLowerCase();
+  return (
+    l.includes('obs') ||
+    l.includes('virtual') ||
+    l.includes('snap camera') ||
+    l.includes('mmhmm') ||
+    l.includes('camo') ||
+    l.includes('ecamm') ||
+    l.includes('epoccam') ||
+    l.includes('ndi')
+  );
+}
+
+/**
+ * Drop the software cameras other apps publish.
+ *
+ * Open Loom already records the screen, so routing a face through OBS or a
+ * similar virtual camera is never the intent here: OBS is a separate tool for a
+ * separate job. Left in the list it was actively harmful, because it enumerates
+ * FIRST on a Mac that has it installed and renders the OBS logo on a blue card
+ * whenever OBS itself is not running, so the app opened with a logo where the
+ * user's face should be.
+ *
+ * The one exception is a machine where a virtual camera is the ONLY camera.
+ * Filtering there would report "no camera found" while a camera plainly exists,
+ * which is a worse lie than offering it, so in that single case it is kept.
+ */
+export function usableCameras(cams: MediaDeviceInfoLite[]): MediaDeviceInfoLite[] {
+  const real = cams.filter((c) => !isVirtualCamera(c.label));
+  return real.length > 0 ? real : cams;
+}
+
+/**
+ * Lower sorts earlier: built-in, then any real webcam, then an iPhone or iPad,
+ * then Desk View, and a virtual camera dead last for the rare case where one
+ * survives the filter above by being the only camera present.
+ */
 function cameraRank(label: string | undefined): number {
+  if (isVirtualCamera(label)) return 4;
   if (isDeskViewCamera(label)) return 3;
   if (isContinuityCamera(label)) return 2;
   const l = (label ?? '').toLowerCase();
@@ -383,7 +428,7 @@ export function Launcher() {
         /* user may have denied camera; dropdowns will show generic names */
       }
       const devices = await window.openloom.listMediaDevices();
-      const cams = dedupeDevices(devices.cameras);
+      const cams = usableCameras(dedupeDevices(devices.cameras));
       const micList = dedupeDevices(devices.mics);
       setCameras(cams);
       setMics(micList);
@@ -419,7 +464,7 @@ export function Launcher() {
       void (async () => {
         try {
           const devices = await window.openloom.listMediaDevices();
-          const cams = dedupeDevices(devices.cameras);
+          const cams = usableCameras(dedupeDevices(devices.cameras));
           const micList = dedupeDevices(devices.mics);
           setCameras(cams);
           setMics(micList);
@@ -552,9 +597,11 @@ export function Launcher() {
               {c.label
                 ? isDeskViewCamera(c.label)
                   ? `${c.label} (points at your desk)`
-                  : isContinuityCamera(c.label)
-                    ? `${c.label} (iPhone)`
-                    : c.label
+                  : isVirtualCamera(c.label)
+                    ? `${c.label} (virtual)`
+                    : isContinuityCamera(c.label)
+                      ? `${c.label} (iPhone)`
+                      : c.label
                 : `Camera ${i + 1}`}
             </option>
           ))}

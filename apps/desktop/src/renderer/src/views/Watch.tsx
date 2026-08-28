@@ -109,6 +109,9 @@ export function parseVtt(raw: string): VttCue[] {
 
 type Tab = 'details' | 'transcript' | 'chapters' | 'activity';
 
+/** Transient protocol failures clear well within three tries. */
+const MAX_VIDEO_LOAD_ATTEMPTS = 3;
+
 export function WatchView({
   id,
   freshRecording = false,
@@ -135,6 +138,15 @@ export function WatchView({
 }) {
   const { push } = useToasts();
   const confirm = useConfirm();
+  /** See the onError handler: transient protocol failures deserve a retry. */
+  const videoLoadAttempt = useRef(0);
+  const videoRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (videoRetryTimer.current) clearTimeout(videoRetryTimer.current);
+    },
+    []
+  );
   const [meta, setMeta] = useState<VideoMeta | null>(null);
   const [tab, setTab] = useState<Tab>('details');
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -223,6 +235,8 @@ export function WatchView({
   // keep it invisible (skeleton on top) until loadeddata fires.
   useEffect(() => {
     setVideoReady(false);
+    // A new source gets its own retry budget.
+    videoLoadAttempt.current = 0;
   }, [videoUrl]);
 
   const transcriptionConfigured = settings.transcription.engine !== 'off';
@@ -732,7 +746,24 @@ export function WatchView({
                     }
                     setBuffered(ranges);
                   }}
-                  onError={() => setVideoError('This video file could not be played. It may still be processing or the file may have moved.')}
+                  onError={() => {
+                    // The openloom-file protocol can fail a request transiently
+                    // while the machine is busy, returning the element to
+                    // readyState 0 with MEDIA_ERR_SRC_NOT_SUPPORTED on a file
+                    // that plays perfectly a second later. Surrendering on the
+                    // first error is what turned that blink into a permanent
+                    // "could not be played" on a healthy recording. Retry a few
+                    // times, backing off, before believing it.
+                    if (videoLoadAttempt.current < MAX_VIDEO_LOAD_ATTEMPTS) {
+                      const attempt = ++videoLoadAttempt.current;
+                      if (videoRetryTimer.current) clearTimeout(videoRetryTimer.current);
+                      videoRetryTimer.current = setTimeout(() => {
+                        videoRef.current?.load();
+                      }, attempt * 250);
+                      return;
+                    }
+                    setVideoError('This video file could not be played. It may still be processing or the file may have moved.');
+                  }}
                 />
               </>
             )}

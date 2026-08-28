@@ -228,6 +228,9 @@ const DRAG_THRESHOLD_PX = 5;
 /** A painted range shorter than this is discarded on release (accidental wiggle). */
 const MIN_RANGE_SEC = 0.2;
 
+/** Transient protocol failures clear well within three tries. */
+const MAX_VIDEO_LOAD_ATTEMPTS = 3;
+
 export function EditorView({
   id,
   onBack,
@@ -262,6 +265,26 @@ export function EditorView({
   const [savedBanner, setSavedBanner] = useState(false);
   const [videoError, setVideoError] = useState<string | null>(null);
   const [videoReady, setVideoReady] = useState(false);
+  /**
+   * Attempts spent reloading the source after a media error.
+   *
+   * The openloom-file protocol can fail a request transiently when the machine
+   * is busy: the element comes back readyState 0, networkState NO_SOURCE and
+   * MEDIA_ERR_SRC_NOT_SUPPORTED within a moment of mounting, on a file that is
+   * present and perfectly playable a second later. Reproduced two runs in six
+   * under load. Giving up on the first error turned that blink into a dead
+   * player until the user navigated away and back, which is the "this video
+   * cannot be played" report. A few quiet retries turn it back into a blink.
+   */
+  const loadAttempt = useRef(0);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      // A pending reload must not fire into an unmounted tree.
+      if (retryTimer.current) clearTimeout(retryTimer.current);
+    },
+    []
+  );
   const [history, setHistory] = useState<Seg[][]>([]);
   // Layouts that undo stepped back off, newest last. Any fresh edit empties it,
   // because redoing onto a branch the user has moved off would restore a layout
@@ -305,6 +328,7 @@ export function EditorView({
     setSelected(null);
     setRangeSel(null);
     setHistory([]);
+    loadAttempt.current = 0;
     // A reload replaces the whole timeline, so redo steps from the old file
     // would splice segment times onto a video they were never measured against.
     setFuture([]);
@@ -1185,7 +1209,19 @@ export function EditorView({
           onPlay={() => setPlaying(true)}
           onPause={() => setPlaying(false)}
           onTimeUpdate={(e) => setCurrent((e.target as HTMLVideoElement).currentTime)}
-          onError={() => setVideoError('This video file could not be loaded for editing.')}
+          onError={() => {
+            // Back off a little between tries: the failures cluster when the
+            // machine is busy, so retrying instantly tends to fail again.
+            if (loadAttempt.current < MAX_VIDEO_LOAD_ATTEMPTS) {
+              const attempt = ++loadAttempt.current;
+              if (retryTimer.current) clearTimeout(retryTimer.current);
+              retryTimer.current = setTimeout(() => {
+                videoRef.current?.load();
+              }, attempt * 250);
+              return;
+            }
+            setVideoError('This video file could not be loaded for editing.');
+          }}
         />
         {videoError && (
           <div className="player-error">

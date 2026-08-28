@@ -8,7 +8,7 @@
  * default. Desk View is ranked last: it points down at the desk, not at a face.
  */
 import { describe, it, expect } from 'vitest';
-import { pickDefaultCamera, pickDefaultMic, isContinuityCamera, isDeskViewCamera } from '../launcher/Launcher';
+import { pickDefaultCamera, pickDefaultMic, isContinuityCamera, isDeskViewCamera, isVirtualCamera, usableCameras } from '../launcher/Launcher';
 
 const cam = (deviceId: string, label: string) => ({ deviceId, label, groupId: `g-${deviceId}`, kind: 'videoinput' as const });
 
@@ -119,5 +119,71 @@ describe('pickDefaultMic', () => {
     >[0][number];
     expect(() => pickDefaultMic([noLabel])).not.toThrow();
     expect(pickDefaultMic([noLabel])).toBe('q');
+  });
+});
+
+describe('isVirtualCamera and the OBS case', () => {
+  // Taken verbatim from a real Mac. OBS enumerates FIRST, which is how a logo
+  // ended up where the user's face should have been.
+  const REAL_MAC = [
+    cam('obs', 'OBS Virtual Camera'),
+    cam('mac', 'FaceTime HD Camera (5B00:3AA6)'),
+    cam('phone', 'Jayden  Camera'),
+  ];
+
+  it('recognises the common virtual cameras', () => {
+    for (const l of ['OBS Virtual Camera', 'Snap Camera', 'mmhmm camera', 'Camo', 'EpocCam', 'Ecamm Live Virtual Cam', 'NDI Video']) {
+      expect(isVirtualCamera(l), l).toBe(true);
+    }
+  });
+
+  it('does not mistake a real camera for a virtual one', () => {
+    for (const l of ['FaceTime HD Camera', 'Logitech BRIO', "Sam's iPhone Camera"]) {
+      expect(isVirtualCamera(l), l).toBe(false);
+    }
+  });
+
+  it('never opens OBS by default, even though macOS lists it first', () => {
+    expect(pickDefaultCamera(REAL_MAC)).toBe('mac');
+  });
+
+  it('prefers a real webcam over a virtual one', () => {
+    expect(pickDefaultCamera([cam('obs', 'OBS Virtual Camera'), cam('brio', 'Logitech BRIO')])).toBe('brio');
+  });
+
+  it('ranks a virtual camera below even an iPhone', () => {
+    expect(pickDefaultCamera([cam('obs', 'OBS Virtual Camera'), cam('phone', "Sam's iPhone Camera")])).toBe('phone');
+  });
+
+  it('still returns the virtual camera when it is genuinely the only one', () => {
+    expect(pickDefaultCamera([cam('obs', 'OBS Virtual Camera')])).toBe('obs');
+  });
+});
+
+describe('usableCameras', () => {
+  it('removes OBS entirely from the real Mac list', () => {
+    const real = [
+      cam('obs', 'OBS Virtual Camera'),
+      cam('mac', 'FaceTime HD Camera (5B00:3AA6)'),
+      cam('phone', 'Jayden  Camera'),
+    ];
+    const out = usableCameras(real);
+    expect(out.map((c) => c.deviceId)).toEqual(['mac', 'phone']);
+    // and the default is still the built in one
+    expect(pickDefaultCamera(out)).toBe('mac');
+  });
+
+  it('keeps a virtual camera only when it is the sole camera, rather than claiming none exists', () => {
+    const only = [cam('obs', 'OBS Virtual Camera')];
+    expect(usableCameras(only)).toHaveLength(1);
+  });
+
+  it('leaves an all-real list untouched and in order', () => {
+    const real = [cam('mac', 'FaceTime HD Camera'), cam('brio', 'Logitech BRIO')];
+    expect(usableCameras(real).map((c) => c.deviceId)).toEqual(['mac', 'brio']);
+  });
+
+  it('handles an empty list', () => {
+    expect(usableCameras([])).toEqual([]);
   });
 });
