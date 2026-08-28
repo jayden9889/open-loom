@@ -1,6 +1,6 @@
 {
   "name": "openloom-server",
-  "version": "0.1.0",
+  "version": "0.1.6",
   "license": "AGPL-3.0-or-later",
   "description": "Self-hosted share server for Open Loom: hosted watch pages, timestamped comments, emoji reactions, viewer analytics and password protection in one small container.",
   "type": "module",
