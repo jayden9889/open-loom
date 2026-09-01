@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime entitlements for the packaged macOS app.
+  electron-builder.yml points here for both entitlements and
+  entitlementsInherit; docs/RELEASING.md describes this file. The hardened
+  runtime (required for notarization) strips JIT, unsigned executable memory,
+  unvalidated libraries and the capture devices - a hardened Electron build
+  without these launches to a blank window and a camera that never opens.
+-->
+<plist version="1.0">
+<dict>
+  <!-- Electron/V8 needs JIT and writable-executable pages. -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <!-- The ffmpeg binary is fetched at first run and is not signed by us. -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+  <!-- Face cam and microphone capture. -->
+  <key>com.apple.security.device.camera</key>
+  <true/>
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
+</dict>
+</plist>
