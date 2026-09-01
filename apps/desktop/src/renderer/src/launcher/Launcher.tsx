@@ -202,11 +202,13 @@ function MicMeter({ deviceId, enabled }: { deviceId: string; enabled: boolean })
           // Decibel scale, because that is how loudness is heard and how
           // every professional meter moves. The old linear RMS times three
           // crowded speech into the bottom of the bar and made jumps feel
-          // arbitrary; mapping -52dB..0dB onto the bar's length gives quiet
-          // and loud speech proportionate, predictable travel.
+          // arbitrary. The floor sits at -42dB: room noise on a laptop mic
+          // idles around -50 to -45dB, so a lower floor kept the bar visibly
+          // lit in silence. Below the floor the bar is flat zero; speech
+          // (roughly -30 to -10dB) gets proportionate, predictable travel.
           const rms = Math.sqrt(sum / data.length);
           const db = 20 * Math.log10(Math.max(rms, 1e-4));
-          const level = Math.min(1, Math.max(0, (db + 52) / 52));
+          const level = Math.min(1, Math.max(0, (db + 42) / 42));
           // "Did we hear you" reads the RAW level, not the smoothed one, so the
           // reassurance still fires the moment you speak.
           if (level > 0.12 && !heardRef.current) {
