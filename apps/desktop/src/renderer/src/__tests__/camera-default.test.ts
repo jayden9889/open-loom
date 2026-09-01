@@ -8,7 +8,7 @@
  * default. Desk View is ranked last: it points down at the desk, not at a face.
  */
 import { describe, it, expect } from 'vitest';
-import { pickDefaultCamera, pickDefaultMic, isContinuityCamera, isDeskViewCamera, isVirtualCamera, usableCameras } from '../launcher/Launcher';
+import { pickDefaultCamera, pickDefaultMic, isContinuityCamera, isDeskViewCamera, isVirtualCamera, usableCameras } from '../device-choice';
 
 const cam = (deviceId: string, label: string) => ({ deviceId, label, groupId: `g-${deviceId}`, kind: 'videoinput' as const });
 

@@ -13,6 +13,8 @@
  * recording through whatever the system felt like picking.
  */
 
+import { pickDefaultCamera, usableCameras } from './device-choice';
+
 /** Strip a pinned deviceId from a track constraint, leaving everything else. */
 export function withoutDeviceId(
   c: boolean | MediaTrackConstraints | undefined
@@ -91,20 +93,107 @@ function describeOpenedTrack(
   };
 }
 
+/** Pin a concrete camera id onto a video constraint, replacing a bare `true`. */
+function withPinnedVideo(
+  c: boolean | MediaTrackConstraints | undefined,
+  deviceId: string
+): MediaTrackConstraints {
+  const base = c && typeof c === 'object' ? c : {};
+  return { ...base, deviceId: { exact: deviceId } };
+}
+
+/**
+ * The camera to open when nothing is pinned. Chromium's own unpinned choice is
+ * the FIRST device in the enumeration list, and OBS Virtual Camera registers
+ * itself first on any Mac that has OBS installed - which put the OBS logo
+ * where the face should be in every window that opened a camera without a
+ * saved id. Rank the real cameras instead, with the same rules the launcher's
+ * picker uses.
+ *
+ * Labels can be blank before this renderer has opened any device, and a
+ * virtual camera cannot be recognised without its label. In that case a
+ * throwaway probe stream is opened and closed purely to unlock the labels; it
+ * is never attached to any element, so nothing from it is ever shown.
+ */
+async function defaultRealCameraId(): Promise<string | undefined> {
+  const md = navigator.mediaDevices;
+  if (typeof md?.enumerateDevices !== 'function') return undefined;
+  try {
+    let cams = (await md.enumerateDevices()).filter((d) => d.kind === 'videoinput');
+    if (cams.length === 0) return undefined;
+    if (cams.every((c) => !c.label)) {
+      try {
+        const probe = await md.getUserMedia({ video: true });
+        for (const t of probe.getTracks()) t.stop();
+        cams = (await md.enumerateDevices()).filter((d) => d.kind === 'videoinput');
+      } catch {
+        /* permission not granted yet - rank the unlabelled list as it is */
+      }
+    }
+    return pickDefaultCamera(usableCameras(cams)) || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Is this camera id still present in the live device list? */
+async function cameraStillExists(deviceId: string): Promise<boolean> {
+  const md = navigator.mediaDevices;
+  if (typeof md?.enumerateDevices !== 'function') return false;
+  try {
+    const devices = await md.enumerateDevices();
+    return devices.some((d) => d.kind === 'videoinput' && d.deviceId === deviceId);
+  } catch {
+    return false;
+  }
+}
+
 export async function getUserMediaResilient(
   constraints: MediaStreamConstraints,
   opts: ResilientMediaOptions = {}
 ): Promise<MediaStream> {
+  // Never hand Chromium a free choice of camera. An unpinned video request
+  // opens the first enumerated device - OBS on a Mac that has it - so an empty
+  // saved camera id (fresh install, hotkey recording, settings preview) used
+  // to open the OBS logo card in every window that shows a face.
+  let video = constraints.video;
+  if (video && !pinnedDeviceId(video)) {
+    const id = await defaultRealCameraId();
+    if (id) video = withPinnedVideo(video, id);
+  }
   try {
-    return await navigator.mediaDevices.getUserMedia(constraints);
+    return await navigator.mediaDevices.getUserMedia({ ...constraints, video });
   } catch (err) {
     // Only a missing pinned device is recoverable here. A real denial
     // (NotAllowedError) or hardware fault must still surface to the caller.
     if (!isStaleDeviceError(err)) throw err;
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: withoutDeviceId(constraints.video),
-      audio: withoutDeviceId(constraints.audio),
-    });
+    // The retry drops the stale pin, but never all the way back to "let the
+    // system pick" - that is the OBS-first slot again. A camera pin that is
+    // still valid survives (the stale id may have been the mic's), a dead one
+    // is replaced by the ranked default real camera when one can be found.
+    const retryVideo = await (async () => {
+      if (!constraints.video) return undefined;
+      const vidPin = pinnedDeviceId(constraints.video);
+      if (vidPin && (await cameraStillExists(vidPin))) return constraints.video;
+      const fallbackId = await defaultRealCameraId();
+      const stripped = withoutDeviceId(constraints.video);
+      return fallbackId ? withPinnedVideo(stripped, fallbackId) : stripped;
+    })();
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: retryVideo,
+        audio: withoutDeviceId(constraints.audio),
+      });
+    } catch (err2) {
+      // The re-pinned default can itself vanish between enumeration and open
+      // (a camera unplugged mid-fallback). Last resort: fully unpinned.
+      if (!isStaleDeviceError(err2)) throw err2;
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: withoutDeviceId(constraints.video),
+        audio: withoutDeviceId(constraints.audio),
+      });
+    }
     // Report only the kinds that genuinely had a device pinned. Where nothing
     // was pinned, stripping the id changed nothing and there is no swap to tell
     // anyone about, so a notice would be noise that trains people to ignore it.
