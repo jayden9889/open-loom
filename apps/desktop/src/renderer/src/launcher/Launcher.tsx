@@ -20,6 +20,7 @@ import { Segmented, Toggle, useToasts, cleanIpcError } from '../components/ui';
 import {
   attachHealthyCameraStream,
   getUserMediaResilient,
+  listMediaDevicesWithLabels,
   type HealthyCameraSession,
 } from '../media';
 import {
@@ -174,16 +175,17 @@ function MicMeter({ deviceId, enabled }: { deviceId: string; enabled: boolean })
         analyser.fftSize = 512;
         source.connect(analyser);
         const data = new Uint8Array(analyser.frequencyBinCount);
-        // Meter ballistics. Raw RMS is noisy frame to frame, so writing it
-        // straight to the DOM made the bar strobe rather than move. The shown
-        // value chases the real level by exponential smoothing (a lerp toward
-        // the target), with a fast attack so a word registers the instant you
-        // speak and a slow release so it glides back instead of snapping.
-        // Time constants are in seconds and the step is derived from the frame
-        // delta, so it behaves identically on a 60Hz and a 120Hz display
-        // rather than moving twice as fast on the latter.
-        const ATTACK_TAU = 0.05;
-        const RELEASE_TAU = 0.25;
+        // Meter ballistics, tuned to read like a professional meter. Raw RMS
+        // is noisy frame to frame, so writing it straight to the DOM made the
+        // bar strobe rather than move. The shown value chases the real level
+        // by exponential smoothing (a lerp toward the target): the attack is
+        // near-instant - one frame - so the bar hits its mark the moment you
+        // speak (the old 50ms attack read as lag), and the release glides
+        // back the way a studio PPM falls. Time constants are in seconds and
+        // the step is derived from the frame delta, so it behaves identically
+        // on a 60Hz and a 120Hz display.
+        const ATTACK_TAU = 0.012;
+        const RELEASE_TAU = 0.3;
         let shown = 0;
         let last = performance.now();
         const tick = (now: number) => {
@@ -197,7 +199,14 @@ function MicMeter({ deviceId, enabled }: { deviceId: string; enabled: boolean })
             const c = (v - 128) / 128;
             sum += c * c;
           }
-          const level = Math.min(1, Math.sqrt(sum / data.length) * 3);
+          // Decibel scale, because that is how loudness is heard and how
+          // every professional meter moves. The old linear RMS times three
+          // crowded speech into the bottom of the bar and made jumps feel
+          // arbitrary; mapping -52dB..0dB onto the bar's length gives quiet
+          // and loud speech proportionate, predictable travel.
+          const rms = Math.sqrt(sum / data.length);
+          const db = 20 * Math.log10(Math.max(rms, 1e-4));
+          const level = Math.min(1, Math.max(0, (db + 52) / 52));
           // "Did we hear you" reads the RAW level, not the smoothed one, so the
           // reassurance still fires the moment you speak.
           if (level > 0.12 && !heardRef.current) {
@@ -327,14 +336,10 @@ export function Launcher() {
       setMode(s.recording.defaultMode === 'cam' ? 'cam' : 'screen-cam');
       setNotes(s.recording.notes);
       lastSourceId.current = s.recording.lastSourceId;
-      // Ask for device labels; without a one-time getUserMedia the names are blank.
-      try {
-        const probe = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
-        for (const t of probe.getTracks()) t.stop();
-      } catch {
-        /* user may have denied camera; dropdowns will show generic names */
-      }
-      const devices = await window.openloom.listMediaDevices();
+      // Enumerated in the page world (see listMediaDevicesWithLabels): the
+      // preload bridge's enumeration returns blank ids and labels in the
+      // packaged app, which read as "no camera found" on a machine with three.
+      const devices = await listMediaDevicesWithLabels();
       const cams = usableCameras(dedupeDevices(devices.cameras));
       const micList = dedupeDevices(devices.mics);
       setCameras(cams);
@@ -371,7 +376,7 @@ export function Launcher() {
     const onDeviceChange = () => {
       void (async () => {
         try {
-          const devices = await window.openloom.listMediaDevices();
+          const devices = await listMediaDevicesWithLabels();
           const cams = usableCameras(dedupeDevices(devices.cameras));
           const micList = dedupeDevices(devices.mics);
           setCameras(cams);
@@ -490,12 +495,16 @@ export function Launcher() {
         </button>
       </div>
 
-      {cameraId ? (
-        <CameraPreview deviceId={cameraId} mirror={settings?.bubble.mirror ?? true} />
-      ) : devicesLoaded ? (
+      {devicesLoaded && cameras.length === 0 ? (
         <div className="launcher-preview launcher-preview-error">
           No camera found. Plug one in and it appears here.
         </div>
+      ) : devicesLoaded ? (
+        // cameraId can legitimately be '' here: devices enumerated before
+        // capture permission is exercised carry blank ids. That is still a
+        // camera, not "no camera" - mount the preview unpinned and let
+        // media.ts resolve the ranked real device.
+        <CameraPreview deviceId={cameraId} mirror={settings?.bubble.mirror ?? true} />
       ) : (
         <div className="launcher-preview">
           <div className="preview-ring" aria-label="Starting camera" />

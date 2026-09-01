@@ -30,15 +30,11 @@ const api: OpenLoomAPI = {
   // capture
   openLauncher: () => ipcRenderer.send('ol:openLauncher'),
   listCaptureSources: () => ipcRenderer.invoke('ol:listCaptureSources'),
-  listMediaDevices: async () => {
-    // Devices are enumerated in the renderer (needs a secure context + labels
-    // after permission); preload just wraps the web API for a stable surface.
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    return {
-      cameras: devices.filter((d) => d.kind === 'videoinput'),
-      mics: devices.filter((d) => d.kind === 'audioinput'),
-    };
-  },
+  // listMediaDevices was removed on purpose: enumerateDevices inside the
+  // contextIsolation preload world returns blank ids and labels in the
+  // packaged app (verified over CDP, 1 Sep 2026), which surfaced as "no
+  // camera found". Enumerate in the page via listMediaDevicesWithLabels
+  // (renderer media.ts) instead.
   startRecording: (opts: RecordingOptions) => ipcRenderer.invoke('ol:startRecording', opts),
   pauseRecording: () => ipcRenderer.invoke('ol:pauseRecording'),
   resumeRecording: () => ipcRenderer.invoke('ol:resumeRecording'),

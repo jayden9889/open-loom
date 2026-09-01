@@ -666,11 +666,6 @@ export interface MediaDeviceInfoLite {
   groupId: string;
 }
 
-export interface MediaDeviceLists {
-  cameras: MediaDeviceInfoLite[];
-  mics: MediaDeviceInfoLite[];
-}
-
 export interface AppInfo {
   version: string;
   platform: string;
@@ -695,7 +690,6 @@ export interface OpenLoomAPI {
   /** Show + focus the floating recording launcher panel (additive; see docs/DECISIONS.md). */
   openLauncher(): void;
   listCaptureSources(): Promise<CaptureSource[]>;
-  listMediaDevices(): Promise<MediaDeviceLists>;
   startRecording(opts: RecordingOptions): Promise<void>;
   pauseRecording(): Promise<void>;
   resumeRecording(): Promise<void>;

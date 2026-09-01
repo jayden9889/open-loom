@@ -124,8 +124,13 @@ async function defaultRealCameraId(): Promise<string | undefined> {
     if (cams.every((c) => !c.label)) {
       try {
         const probe = await md.getUserMedia({ video: true });
-        for (const t of probe.getTracks()) t.stop();
-        cams = (await md.enumerateDevices()).filter((d) => d.kind === 'videoinput');
+        try {
+          // Enumerate while the probe is still OPEN: ids and labels are only
+          // exposed during an active capture (see listMediaDevicesWithLabels).
+          cams = (await md.enumerateDevices()).filter((d) => d.kind === 'videoinput');
+        } finally {
+          for (const t of probe.getTracks()) t.stop();
+        }
       } catch {
         /* permission not granted yet - rank the unlabelled list as it is */
       }
@@ -134,6 +139,57 @@ async function defaultRealCameraId(): Promise<string | undefined> {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Enumerate cameras and mics WITH their ids and labels.
+ *
+ * This must run HERE, in the page, never behind the preload bridge. Measured
+ * live against the installed app over CDP (1 Sep 2026): enumerateDevices in
+ * the page world returns every id and label, while the same call inside the
+ * contextIsolation preload world returns blank ids and blank labels for the
+ * same devices, at rest and even during an active capture. The old preload
+ * listMediaDevices therefore fed the launcher three blank cameras, the
+ * dedupe collapsed them into one unlabelled entry, and the app said "no
+ * camera found" while three cameras sat on the machine.
+ *
+ * The probe stream is defence for ordinary Chromium label gating (labels
+ * hidden until the page has exercised capture permission), and it stays open
+ * across the enumeration because labels can hide again the moment capture
+ * stops.
+ */
+export async function listMediaDevicesWithLabels(): Promise<{
+  cameras: MediaDeviceInfo[];
+  mics: MediaDeviceInfo[];
+}> {
+  const md = navigator.mediaDevices;
+  let devices = await md.enumerateDevices();
+  const inputs = devices.filter((d) => d.kind !== 'audiooutput');
+  if (inputs.length > 0 && inputs.every((d) => !d.label)) {
+    let probe: MediaStream | null = null;
+    try {
+      probe = await md.getUserMedia({ audio: true, video: true });
+    } catch {
+      // Camera may be denied or busy while the mic is fine; half the labels
+      // beat none.
+      try {
+        probe = await md.getUserMedia({ audio: true });
+      } catch {
+        /* both denied - return the unlabelled list rather than nothing */
+      }
+    }
+    if (probe) {
+      try {
+        devices = await md.enumerateDevices();
+      } finally {
+        for (const t of probe.getTracks()) t.stop();
+      }
+    }
+  }
+  return {
+    cameras: devices.filter((d) => d.kind === 'videoinput'),
+    mics: devices.filter((d) => d.kind === 'audioinput'),
+  };
 }
 
 /** Is this camera id still present in the live device list? */
